@@ -1,0 +1,216 @@
+{
+  "lattice_type": [
+    "FODO",
+    "DBA",
+    "TBA",
+    "4BA",
+    "5BA",
+    "6BA",
+    "7BA",
+    "9BA",
+    {
+      "label": "MBA",
+      "aliases": [
+        "multi-bend achromat",
+        "Multi-Bend Achromat"
+      ]
+    },
+    {
+      "label": "HMBA",
+      "aliases": [
+        "hybrid MBA",
+        "Hybrid MBA"
+      ]
+    },
+    "H6BA",
+    "H7BA",
+    {
+      "label": "TME",
+      "aliases": [
+        "theoretical minimum emittance"
+      ]
+    },
+    "quasi-TME"
+  ],
+  "physics_quantity": [
+    "emittance",
+    "chromaticity",
+    "dispersion",
+    "beta function",
+    "Twiss",
+    "tune",
+    "dynamic aperture",
+    "momentum acceptance",
+    "momentum compaction",
+    "radiation integral",
+    "radiation damping",
+    "damping partition",
+    "synchrotron radiation",
+    "longitudinal dynamics",
+    "coupling",
+    "symplecticity",
+    "working point",
+    "intrabeam scattering",
+    "impedance",
+    "resonance driving term",
+    "energy spread",
+    "Touschek lifetime",
+    "bunch length",
+    {
+      "label": "amplitude-dependent tune shift",
+      "aliases": ["ADTS"]
+    },
+    "natural chromaticity",
+    "RF bucket height",
+    "synchrotron tune",
+    "damping time",
+    "closed orbit"
+  ],
+  "magnet_type": [
+    "dipole",
+    "quadrupole",
+    "sextupole",
+    "octupole",
+    "combined-function dipole",
+    "reverse bend",
+    {
+      "label": "longitudinal gradient bend",
+      "aliases": [
+        "LGB"
+      ]
+    },
+    "wiggler",
+    "undulator"
+  ],
+  "design_method": [
+    "-I transformation",
+    {
+      "label": "higher-order achromat",
+      "aliases": [
+        "HOA",
+        "Higher-Order Achromat"
+      ]
+    },
+    {
+      "label": "chromatic correction section",
+      "aliases": [
+        "CCS",
+        "local chromatic correction",
+        "LCC"
+      ]
+    },
+    "matching cell",
+    "Newton method",
+    "genetic algorithm",
+    "particle swarm",
+    "surrogate model",
+    "TPSA",
+    "damping wiggler",
+    {
+      "label": "Robinson theorem",
+      "aliases": ["Robinson's theorem", "damping partition shift"]
+    },
+    "MOGA",
+    "dispersion bump"
+  ],
+  "lattice_component": [
+    "straight section",
+    "long straight",
+    "medium straight",
+    "matching section",
+    "matching quad triplet",
+    "central arc",
+    "quasi-TME cell",
+    "insertion device",
+    "working point",
+    "dispersion suppressor",
+    "chromatic sextupole pair",
+    "harmonic sextupole",
+    "short straight",
+    "reverse bend section"
+  ],
+  "injection_method": [
+    "pulsed bump injection",
+    "pulsed multipole injection",
+    "swap-out injection",
+    "longitudinal injection",
+    "off-axis injection",
+    "on-axis injection"
+  ],
+  "optimization_objective": [
+    "chromaticity correction",
+    "tune matching",
+    "achromaticity",
+    "low emittance",
+    "large dynamic aperture",
+    "large momentum acceptance",
+    "Touschek lifetime optimization",
+    "emittance with IBS",
+    "RDT minimization",
+    "ADTS minimization"
+  ],
+  "software_api": [
+    "pyJuTrack",
+    "JuTrack",
+    "gettune",
+    "getchrom",
+    "findm66",
+    "twissring",
+    "ringpara",
+    "spos",
+    "linepass",
+    "ringpass",
+    "DRIFT",
+    "KQUAD",
+    "KSEXT",
+    "KOCT",
+    "SBEND",
+    "RBEND",
+    "CORRECTOR",
+    "MARKER",
+    "RFCA",
+    "SOLENOID",
+    "ESBEND",
+    "ERBEND",
+    "LBEND",
+    "thinMULTIPOLE",
+    "Number2TPSAD",
+    "TPSAD2Number",
+    "DTPSAD",
+    "set_field",
+    "computeRDT",
+    "dynamic_aperture",
+    "find_closed_orbit",
+    "Gradient",
+    "Jacobian",
+    "Beam_Gauss",
+    "pringpass",
+    "plinepass",
+    "rad_on",
+    "rad_off",
+    "periodicEdwardsTengTwiss",
+    "twissline",
+    "fastfindm66",
+    "findelem",
+    "EdwardsTengTwiss",
+    "check_lost",
+    "Beam"
+  ],
+  "reference_machine": [
+    "ESRF-EBS",
+    "APS-U",
+    "HEPS",
+    "SLS-2",
+    "MAX IV",
+    "ALS-U",
+    "Sirius",
+    "Diamond-II",
+    "HALF",
+    "SKIF",
+    "SOLEIL-U",
+    "Elettra 2.0",
+    "PETRA IV",
+    "NSLS-II",
+    "PETRA III"
+  ]
+}

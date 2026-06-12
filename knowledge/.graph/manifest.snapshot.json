@@ -1,0 +1,36 @@
+{
+  "schema_version": "0.2",
+  "include": [
+    "**/*.md"
+  ],
+  "exclude": [
+    ".graph/**",
+    "**/.ipynb_checkpoints/**"
+  ],
+  "output_dir": ".graph",
+  "release_safe": true,
+  "graph": {
+    "emit_cooccurrence_edges": false,
+    "min_fact_confidence": 0.55,
+    "cluster_method": "learned_tfidf_kmeans",
+    "min_cluster_count": 10,
+    "max_cluster_count": 22,
+    "cluster_iterations": 5
+  },
+  "markdown": {
+    "max_chars_per_chunk": 2600,
+    "min_chars_per_chunk": 350
+  },
+  "notebook": {
+    "include_code": false,
+    "max_chars_per_chunk": 2200,
+    "min_chars_per_chunk": 250
+  },
+  "pdf": {
+    "pages_per_chunk": 2,
+    "max_pages": 1200,
+    "use_toc": true,
+    "min_chars_per_chunk": 400
+  },
+  "sources": []
+}

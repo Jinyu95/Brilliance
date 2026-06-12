@@ -1,0 +1,39 @@
+# BRILLIANCE — docker compose entry point
+#
+# Usage:
+#   cp .env.example .env          # set LLM_API_KEY etc.
+#   docker compose up --build     # first time: builds image, precompiles Julia
+#   docker compose up             # subsequent launches: instant start
+#
+# The image is tagged "brilliance:latest".
+# Data produced by the agent (sessions/, workspace/) is persisted via volumes.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile.jutrack
+    image: brilliance:latest
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      # Use local executor inside the container (no nested Docker)
+      EXECUTOR: local
+      # pyJuTrack is installed into the container's site-packages
+      JUTRACK_PYTHON: ""
+      # JuTrack.jl is at /opt/JuTrack.jl inside the image
+      JUTRACK_JL_PROJECT: /opt/JuTrack.jl
+      JULIA_PKG_OFFLINE: "true"
+    volumes:
+      # Persist generated sessions and workspace files across restarts
+      - ./sessions:/app/sessions
+      - ./workspace:/app/workspace
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

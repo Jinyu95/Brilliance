@@ -1,0 +1,670 @@
+[
+  {
+    "subject_label": "emittance",
+    "subject_category": "physics_quantity",
+    "fact_count": 26,
+    "fact_types": {
+      "measurement": 23,
+      "relation": 1,
+      "design_rule": 2
+    }
+  },
+  {
+    "subject_label": "energy",
+    "subject_category": "physics_quantity",
+    "fact_count": 18,
+    "fact_types": {
+      "measurement": 18
+    }
+  },
+  {
+    "subject_label": "circumference",
+    "subject_category": "physics_quantity",
+    "fact_count": 12,
+    "fact_types": {
+      "measurement": 12
+    }
+  },
+  {
+    "subject_label": "KQUAD",
+    "subject_category": "software_api",
+    "fact_count": 7,
+    "fact_types": {
+      "api_signature": 7
+    }
+  },
+  {
+    "subject_label": "Diamond-II",
+    "subject_category": "reference_machine",
+    "fact_count": 6,
+    "fact_types": {
+      "measurement": 6
+    }
+  },
+  {
+    "subject_label": "MAX IV",
+    "subject_category": "reference_machine",
+    "fact_count": 5,
+    "fact_types": {
+      "measurement": 5
+    }
+  },
+  {
+    "subject_label": "SLS-2",
+    "subject_category": "reference_machine",
+    "fact_count": 5,
+    "fact_types": {
+      "measurement": 5
+    }
+  },
+  {
+    "subject_label": "DRIFT",
+    "subject_category": "software_api",
+    "fact_count": 5,
+    "fact_types": {
+      "api_signature": 5
+    }
+  },
+  {
+    "subject_label": "Lattice",
+    "subject_category": "software_api",
+    "fact_count": 5,
+    "fact_types": {
+      "api_signature": 5
+    }
+  },
+  {
+    "subject_label": "set_field",
+    "subject_category": "software_api",
+    "fact_count": 5,
+    "fact_types": {
+      "api_signature": 5
+    }
+  },
+  {
+    "subject_label": "H7BA",
+    "subject_category": "lattice_type",
+    "fact_count": 4,
+    "fact_types": {
+      "measurement": 4
+    }
+  },
+  {
+    "subject_label": "APS-U",
+    "subject_category": "reference_machine",
+    "fact_count": 4,
+    "fact_types": {
+      "measurement": 4
+    }
+  },
+  {
+    "subject_label": "HEPS",
+    "subject_category": "reference_machine",
+    "fact_count": 4,
+    "fact_types": {
+      "measurement": 4
+    }
+  },
+  {
+    "subject_label": "SKIF",
+    "subject_category": "reference_machine",
+    "fact_count": 4,
+    "fact_types": {
+      "measurement": 4
+    }
+  },
+  {
+    "subject_label": "SBEND",
+    "subject_category": "software_api",
+    "fact_count": 4,
+    "fact_types": {
+      "api_signature": 4
+    }
+  },
+  {
+    "subject_label": "twissring",
+    "subject_category": "software_api",
+    "fact_count": 4,
+    "fact_types": {
+      "api_signature": 4
+    }
+  },
+  {
+    "subject_label": "Elettra 2.0",
+    "subject_category": "reference_machine",
+    "fact_count": 3,
+    "fact_types": {
+      "measurement": 3
+    }
+  },
+  {
+    "subject_label": "HALF",
+    "subject_category": "reference_machine",
+    "fact_count": 3,
+    "fact_types": {
+      "measurement": 3
+    }
+  },
+  {
+    "subject_label": "SOLEIL-U",
+    "subject_category": "reference_machine",
+    "fact_count": 3,
+    "fact_types": {
+      "measurement": 3
+    }
+  },
+  {
+    "subject_label": "Sirius",
+    "subject_category": "reference_machine",
+    "fact_count": 3,
+    "fact_types": {
+      "measurement": 3
+    }
+  },
+  {
+    "subject_label": "DTPSAD",
+    "subject_category": "software_api",
+    "fact_count": 3,
+    "fact_types": {
+      "api_signature": 3
+    }
+  },
+  {
+    "subject_label": "KSEXT",
+    "subject_category": "software_api",
+    "fact_count": 3,
+    "fact_types": {
+      "api_signature": 3
+    }
+  },
+  {
+    "subject_label": "Number2TPSAD",
+    "subject_category": "software_api",
+    "fact_count": 3,
+    "fact_types": {
+      "api_signature": 3
+    }
+  },
+  {
+    "subject_label": "findelem",
+    "subject_category": "software_api",
+    "fact_count": 3,
+    "fact_types": {
+      "api_signature": 3
+    }
+  },
+  {
+    "subject_label": "ringpara",
+    "subject_category": "software_api",
+    "fact_count": 3,
+    "fact_types": {
+      "api_signature": 3
+    }
+  },
+  {
+    "subject_label": "set_tps_dim",
+    "subject_category": "software_api",
+    "fact_count": 3,
+    "fact_types": {
+      "api_signature": 3
+    }
+  },
+  {
+    "subject_label": "off-axis injection",
+    "subject_category": "injection_method",
+    "fact_count": 2,
+    "fact_types": {
+      "measurement": 2
+    }
+  },
+  {
+    "subject_label": "7BA",
+    "subject_category": "lattice_type",
+    "fact_count": 2,
+    "fact_types": {
+      "measurement": 2
+    }
+  },
+  {
+    "subject_label": "9BA",
+    "subject_category": "lattice_type",
+    "fact_count": 2,
+    "fact_types": {
+      "measurement": 2
+    }
+  },
+  {
+    "subject_label": "TME",
+    "subject_category": "lattice_type",
+    "fact_count": 2,
+    "fact_types": {
+      "relation": 2
+    }
+  },
+  {
+    "subject_label": "dipole",
+    "subject_category": "magnet_type",
+    "fact_count": 2,
+    "fact_types": {
+      "relation": 1,
+      "design_rule": 1
+    }
+  },
+  {
+    "subject_label": "dynamic aperture",
+    "subject_category": "physics_quantity",
+    "fact_count": 2,
+    "fact_types": {
+      "measurement": 2
+    }
+  },
+  {
+    "subject_label": "ALS-U",
+    "subject_category": "reference_machine",
+    "fact_count": 2,
+    "fact_types": {
+      "measurement": 2
+    }
+  },
+  {
+    "subject_label": "ESRF-EBS",
+    "subject_category": "reference_machine",
+    "fact_count": 2,
+    "fact_types": {
+      "measurement": 2
+    }
+  },
+  {
+    "subject_label": "Beam",
+    "subject_category": "software_api",
+    "fact_count": 2,
+    "fact_types": {
+      "measurement": 1,
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "Gradient",
+    "subject_category": "software_api",
+    "fact_count": 2,
+    "fact_types": {
+      "api_signature": 2
+    }
+  },
+  {
+    "subject_label": "Jacobian",
+    "subject_category": "software_api",
+    "fact_count": 2,
+    "fact_types": {
+      "api_signature": 2
+    }
+  },
+  {
+    "subject_label": "getchrom",
+    "subject_category": "software_api",
+    "fact_count": 2,
+    "fact_types": {
+      "api_signature": 2
+    }
+  },
+  {
+    "subject_label": "gettune",
+    "subject_category": "software_api",
+    "fact_count": 2,
+    "fact_types": {
+      "api_signature": 2
+    }
+  },
+  {
+    "subject_label": "linepass",
+    "subject_category": "software_api",
+    "fact_count": 2,
+    "fact_types": {
+      "api_signature": 2
+    }
+  },
+  {
+    "subject_label": "TPSA",
+    "subject_category": "design_method",
+    "fact_count": 1,
+    "fact_types": {
+      "relation": 1
+    }
+  },
+  {
+    "subject_label": "on-axis injection",
+    "subject_category": "injection_method",
+    "fact_count": 1,
+    "fact_types": {
+      "measurement": 1
+    }
+  },
+  {
+    "subject_label": "combined-function dipole",
+    "subject_category": "magnet_type",
+    "fact_count": 1,
+    "fact_types": {
+      "relation": 1
+    }
+  },
+  {
+    "subject_label": "Twiss",
+    "subject_category": "physics_quantity",
+    "fact_count": 1,
+    "fact_types": {
+      "relation": 1
+    }
+  },
+  {
+    "subject_label": "bunch length",
+    "subject_category": "physics_quantity",
+    "fact_count": 1,
+    "fact_types": {
+      "measurement": 1
+    }
+  },
+  {
+    "subject_label": "CORRECTOR",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "ERBEND",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "ESBEND",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "EdwardsTengTwiss",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "HKICKER",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "KOCT",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "LongitudinalRLCWake",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "MARKER",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "QUAD",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "RBEND",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "RFCA",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "SOLENOID",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "TPSAD2Number",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "VKICKER",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "check_lost",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "copy_element",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "deepcopy_element",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "fastfindm66",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "find_closed_orbit_4d",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "find_closed_orbit_6d",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "findm66",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "findm66_refpts",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "get_2nd_moment",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "get_centroid",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "get_emittance",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "integral_U0",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "load_lattice",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "periodicEdwardsTengTwiss",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "plinepass",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "pringpass",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "ringpass",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "save_lattice",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "spos",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "thinMULTIPOLE",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "total_length",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "tracking_U0",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "twiss_beam",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  },
+  {
+    "subject_label": "twissline",
+    "subject_category": "software_api",
+    "fact_count": 1,
+    "fact_types": {
+      "api_signature": 1
+    }
+  }
+]

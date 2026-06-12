@@ -1,0 +1,30 @@
+# Python dependencies for BRILLIANCE
+#
+# Preferred install: python scripts/setup_env.py  (creates .venv and installs everything)
+# Manual install:    pip install -e .              (uses pyproject.toml)
+#
+# NOTE: matplotlib and scipy are intentionally EXCLUDED.
+# - matplotlib crashes in the pyJuTrack conda env due to a BLAS DLL conflict.
+#   Generated lattice scripts must print numeric results only (no plots).
+# - scipy is not required by any agent or template.
+#
+# pyJuTrack is installed from the bundled source: JuTrack.jl/python_integration/
+#   pip install -e JuTrack.jl/python_integration/
+# It is NOT listed here because it has no PyPI release yet.
+
+# Julia bridge — downloads Julia automatically if not on PATH
+juliacall>=0.9.20
+juliapkg>=0.1.10
+
+# Numeric runtime (used by generated lattice scripts)
+numpy>=1.24
+
+# AutoGen 0.4+ multi-agent framework
+autogen-agentchat>=0.4
+autogen-ext[openai]>=0.4
+
+# Web UI
+streamlit>=1.34
+
+# Environment variable management
+python-dotenv>=1.0

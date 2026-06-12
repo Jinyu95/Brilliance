@@ -1,0 +1,68 @@
+[
+  {
+    "id": "stage1_single_element_matrices",
+    "prompt": "Compute the 6x6 transfer matrices for a drift (L=2 m), a focusing quadrupole (L=0.5 m, K1=1.5 m⁻²), and a sector dipole (L=1 m, angle=0.2 rad). For each element verify key matrix entries against the analytic formula: drift M[0,1]=L, quad trace_x = 2·cos(√K1·L), dipole dispersion M[0,5] nonzero. Report trace_x, trace_y, D_exit, and T56 for each element.",
+    "require_stable": false,
+    "minimum_score": 70,
+    "max_messages": 20,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "stage2_periodic_fodo_cell_60deg",
+    "prompt": "Design a periodic FODO cell for a 3 GeV electron ring: total cell length 10 m, two 9° sector dipoles, one focusing and one defocusing quadrupole, drift spaces. Find the quadrupole strength that gives a horizontal phase advance of 60° per cell. Report trace_x, trace_y, phase_advance_x_deg, D_exit, and T56.",
+    "require_stable": false,
+    "minimum_score": 70,
+    "max_messages": 24,
+    "expected_outcome": "design",
+    "expected_cell_type": "FODO"
+  },
+  {
+    "id": "stage3_fodo_arc_dispersion",
+    "prompt": "Design a 3 GeV electron storage ring with a FODO lattice: 20 cells, 2 dipoles per cell, circumference around 100 m. Compute the fractional tunes, natural chromaticities, natural emittance, momentum compaction factor, radiation integrals I1–I5, damping partition numbers (Robinson sum), energy loss per turn U0, and damping times. Also report the peak beta functions and peak dispersion, and explain where to place BPMs and orbit correctors for best orbit response.",
+    "require_stable": true,
+    "minimum_score": 60,
+    "max_messages": 28,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "stage6_mba_6gev_radiation_integrals",
+    "prompt": "Design a 6 GeV 7-bend achromat storage ring with 24 superperiods. Use a mirror-symmetric cell with graded dipoles and 7 quadrupole families. Compute the radiation integrals I1–I5, natural horizontal emittance, damping partition numbers (the Robinson sum Jx+Jy+Je should equal 4), energy loss per turn, and damping times.",
+    "require_stable": true,
+    "minimum_score": 55,
+    "max_messages": 36,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "dba_3gev_12_cells",
+    "prompt": "Design a 3 GeV double-bend achromat storage ring with 12 cells and circumference around 250 m. Target natural horizontal emittance below 5 nm·rad. Report tunes, chromaticities, emittance, and radiation integrals.",
+    "require_stable": true,
+    "minimum_score": 60,
+    "max_messages": 30,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "fodo_25gev_20_cells",
+    "prompt": "Design a 2.5 GeV FODO booster ring with 20 cells and circumference around 160 m, with one focusing and one defocusing quadrupole per cell. Report tunes, chromaticities, emittance, and momentum compaction factor.",
+    "require_stable": true,
+    "minimum_score": 60,
+    "max_messages": 24,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "std7ba_6gev_24_cells",
+    "prompt": "Design a 6 GeV 7BA storage ring for a fourth-generation synchrotron light source with 24 superperiods and target natural emittance below 50 pm·rad. Report tunes, chromaticities, emittance, radiation integrals, and damping times.",
+    "require_stable": true,
+    "minimum_score": 55,
+    "max_messages": 36,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "stage10_infeasible_dba_refusal",
+    "prompt": "Design a 0.5 GeV DBA storage ring with 4 cells, circumference 20 m, target emittance below 1 pm·rad, no sextupoles, and large dynamic aperture.",
+    "require_stable": false,
+    "minimum_score": 0,
+    "max_messages": 16,
+    "expected_outcome": "refusal",
+    "required_binding_constraint": "target_emittance"
+  }
+]

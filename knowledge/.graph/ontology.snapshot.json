@@ -1,0 +1,245 @@
+{
+  "schema_version": "0.2",
+  "relations": {
+    "is_a": [
+      "is a type of",
+      "is a kind of"
+    ],
+    "uses": [
+      "uses",
+      "use",
+      "using",
+      "employs"
+    ],
+    "requires": [
+      "requires",
+      "need",
+      "needs",
+      "must use",
+      "depends on"
+    ],
+    "enables": [
+      "enables",
+      "allows",
+      "provides"
+    ],
+    "reduces": [
+      "reduces",
+      "lowers",
+      "suppresses",
+      "minimizes"
+    ],
+    "increases": [
+      "increases",
+      "raises",
+      "enhances"
+    ],
+    "corrects": [
+      "corrects",
+      "compensates",
+      "fixes"
+    ],
+    "improves": [
+      "improves",
+      "optimizes"
+    ],
+    "challenges": [
+      "challenges",
+      "limits",
+      "complicates"
+    ],
+    "cancels": [
+      "cancels",
+      "compensates"
+    ],
+    "example_of": [
+      "example",
+      "examples",
+      "examples:"
+    ],
+    "scales_as": [
+      "scales as",
+      "proportional to",
+      "goes as",
+      "varies as"
+    ],
+    "trades_off_with": [
+      "trades off",
+      "at the expense of",
+      "at the cost of"
+    ],
+    "drives": [
+      "drives",
+      "excites",
+      "generates"
+    ]
+  },
+  "quantity_aliases": {
+    "energy": [
+      "energy",
+      "energy [gev]",
+      "e[gev]"
+    ],
+    "circumference": [
+      "circumference",
+      "circumference [m]",
+      "c[m]",
+      "circumf.",
+      "circumf"
+    ],
+    "emittance": [
+      "emittance",
+      "emittance [pm.rad]",
+      "emittance [m.rad]",
+      "emit[pm]",
+      "emittx",
+      "hor. emit.",
+      "hor emit"
+    ],
+    "beam_current": [
+      "current",
+      "current [ma]",
+      "current [mA]",
+      "beam current",
+      "stored current"
+    ],
+    "momentum_compaction": [
+      "momentum compaction",
+      "mom. compaction [1e-5]",
+      "mom.comp[1e-5]",
+      "alphac"
+    ],
+    "energy_loss_per_turn": [
+      "energy loss/turn [mev]",
+      "energy loss/turn",
+      "u0"
+    ],
+    "horizontal_beta_long_straight": [
+      "horizontal beta",
+      "betax"
+    ],
+    "vertical_beta_long_straight": [
+      "vertical beta",
+      "betay"
+    ],
+    "num_straight_sections": [
+      "num. straight sections",
+      "nstr",
+      "straight sections"
+    ],
+    "chromaticity_x": [
+      "chromaticity xix",
+      "chromx",
+      "xix"
+    ],
+    "chromaticity_y": [
+      "chromaticity xiy",
+      "chromy",
+      "xiy"
+    ],
+    "tune_x": [
+      "tune nux",
+      "nux",
+      "qx"
+    ],
+    "tune_y": [
+      "tune nuy",
+      "nuy",
+      "qy"
+    ],
+    "energy_spread": [
+      "energy spread",
+      "sigma_E",
+      "sigma_delta"
+    ],
+    "bunch_length": [
+      "bunch length",
+      "sigma_z",
+      "bunchlength"
+    ],
+    "synchrotron_tune": [
+      "synchrotron tune",
+      "nus",
+      "nu_s"
+    ],
+    "dynamic_aperture": [
+      "dynamic aperture",
+      "DA"
+    ],
+    "damping_time_x": [
+      "horizontal damping time",
+      "tau_x"
+    ],
+    "damping_time_y": [
+      "vertical damping time",
+      "tau_y"
+    ],
+    "Touschek_lifetime": [
+      "Touschek lifetime",
+      "Touschek"
+    ],
+    "num_cells": [
+      "number of cells",
+      "N_cells",
+      "cells"
+    ],
+    "num_dipoles": [
+      "number of dipoles",
+      "N_d",
+      "total dipoles"
+    ]
+  },
+  "attribute_aliases": {
+    "lattice_type": [
+      "lattice type",
+      "lattice",
+      "lattice design"
+    ],
+    "injection_method": [
+      "injection method",
+      "injection"
+    ]
+  },
+  "measurement_patterns": [
+    {
+      "quantity": "energy",
+      "unit": "GeV",
+      "regex": "(?P<value>\\d+(?:\\.\\d+)?)\\s*GeV"
+    },
+    {
+      "quantity": "emittance",
+      "unit": "rad",
+      "regex": "(?P<value>\\d+(?:\\.\\d+)?)\\s*(?P<prefix>pm|nm|um|mm)\\s*(?:[·\\-\\s]*rad)"
+    },
+    {
+      "quantity": "circumference",
+      "unit": "m",
+      "regex": "(?:circumference[^\\n]{0,30}?|C\\s*[~=]|around\\s+)(?P<value>\\d+(?:\\.\\d+)?)\\s*m"
+    },
+    {
+      "quantity": "magnet_strength_k1",
+      "unit": "m^-2",
+      "regex": "(?:k1|K1)[^\\n]{0,12}?(?P<value>[+-]?\\d+(?:\\.\\d+)?)\\s*m\\^?-?2"
+    },
+    {
+      "quantity": "magnet_strength_k2",
+      "unit": "m^-3",
+      "regex": "(?:k2|K2)[^\\n]{0,12}?(?P<value>[+-]?\\d+(?:\\.\\d+)?)\\s*m\\^?-?3"
+    },
+    {
+      "quantity": "dynamic_aperture",
+      "unit": "mm",
+      "regex": "(?:DA|dynamic aperture)[^\\n]{0,20}?(?P<value>\\d+(?:\\.\\d+)?)\\s*mm"
+    },
+    {
+      "quantity": "bunch_length",
+      "unit": "mm",
+      "regex": "(?:bunch length|sigma_z)[^\\n]{0,20}?(?P<value>\\d+(?:\\.\\d+)?)\\s*mm"
+    },
+    {
+      "quantity": "energy_spread",
+      "unit": "",
+      "regex": "(?:energy spread|sigma_E)[^\\n]{0,20}?(?P<value>\\d+(?:\\.\\d+)?(?:e[+-]?\\d+)?)\\s*(?:%|)"
+    }
+  ]
+}

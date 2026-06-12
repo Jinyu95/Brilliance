@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brilliance"
+version = "0.1.0"
+description = "AI agent for accelerator lattice design using pyJuTrack"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["accelerator physics", "particle accelerator", "lattice design", "AI agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Physics",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # Julia bridge — installs Julia automatically via juliacall if not found
+    "juliacall>=0.9.20",
+    "juliapkg>=0.1.10",
+    # pyJuTrack from the bundled source (installed via setup_env.py / Dockerfile)
+    # Listed here for documentation; the actual install targets JuTrack.jl/python_integration/
+    "numpy>=1.24",
+    # AutoGen multi-agent framework
+    "autogen-agentchat>=0.4",
+    "autogen-ext[openai]>=0.4",
+    # App
+    "streamlit>=1.34",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black",
+    "ruff",
+]
+
+[project.scripts]
+brilliance = "app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agents*", "scripts*", "benchmarks*", "templates*", "knowledge*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.json", "*.md", "*.jl", "*.py", "*.toml", "*.enc"]
