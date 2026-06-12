@@ -25,6 +25,13 @@ Subsequent launches skip compilation and start in seconds:
 docker compose up
 ```
 
+> **Restricted network** — if Docker Hub, julialang.org, or PyPI are unreachable,
+> use the `mirror` profile which routes all downloads through alternative mirrors
+> (dockerpull.org / BFSU Julia / Tsinghua pip):
+> ```bash
+> docker compose --profile mirror up --build
+> ```
+
 ### LLM configuration
 
 Edit `.env` and set these three variables:

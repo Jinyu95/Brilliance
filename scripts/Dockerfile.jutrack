@@ -1,27 +1,35 @@
 # BRILLIANCE — Docker build for the JuTrack sandbox
 #
-# Stages:
-#   julia-deps  — install Julia and precompile JuTrack from the bundled source
-#   app         — install Python deps and the Streamlit app
+# Build (standard):
+#   docker compose up --build
 #
-# Build:
-#   docker build -f scripts/Dockerfile.jutrack -t brilliance:latest .
-#
-# The build context must be the project root (the default when using
-# docker compose from the project root).
+# Build (if Docker Hub / julialang.org are unreachable):
+#   docker compose up --build   # mirrors are pre-configured in docker-compose.yml
+#   -- or manually --
+#   docker build -f scripts/Dockerfile.jutrack \
+#     --build-arg BASE_IMAGE=dockerpull.org/library/python:3.11-slim \
+#     --build-arg JULIA_MIRROR=https://mirrors.bfsu.edu.cn/julia-releases/bin/linux/x64/1.10 \
+#     -t brilliance:latest .
+
+# ── Configurable base image (override for pip mirrors) ─────────────────────
+ARG BASE_IMAGE=python:3.11-slim
 
 # ── Stage 1: Julia + JuTrack precompile ──────────────────────────────────────
-FROM python:3.11-slim AS julia-deps
+FROM ${BASE_IMAGE} AS julia-deps
 
 # System packages needed to build Julia packages with native extensions
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates git gcc g++ gfortran make \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Julia 1.10 LTS
+# Julia version and download mirror.
+# JULIA_MIRROR — base URL for the julia tarball directory (no trailing slash).
+# Default: official S3.  Alternative: https://mirrors.bfsu.edu.cn/julia-releases/bin/linux/x64/1.10
 ARG JULIA_VERSION=1.10.4
 ARG JULIA_ARCH=x86_64
-RUN curl -fsSL "https://julialang-s3.julialang.org/bin/linux/x64/1.10/julia-${JULIA_VERSION}-linux-${JULIA_ARCH}.tar.gz" \
+ARG JULIA_MIRROR=https://julialang-s3.julialang.org/bin/linux/x64/1.10
+
+RUN curl -fsSL "${JULIA_MIRROR}/julia-${JULIA_VERSION}-linux-${JULIA_ARCH}.tar.gz" \
     | tar -xz -C /opt && \
     ln -s /opt/julia-${JULIA_VERSION}/bin/julia /usr/local/bin/julia
 
@@ -49,7 +57,7 @@ RUN julia --project=/opt/JuTrack.jl -e " \
     " 2>&1
 
 # ── Stage 2: Python app ───────────────────────────────────────────────────────
-FROM python:3.11-slim AS app
+FROM ${BASE_IMAGE} AS app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ gfortran curl \
@@ -68,18 +76,20 @@ ENV JULIA_PKG_OFFLINE=true
 
 WORKDIR /app
 
-# Install Python dependencies first (cached layer)
+# Install Python dependencies first (cached layer).
+# PIP_INDEX_URL — override for pip mirrors.
+# Default: PyPI.  Alternative: https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_INDEX_URL=https://pypi.org/simple
 COPY JuTrack.jl/python_integration /tmp/pyjutrack_src
-RUN pip install --no-cache-dir \
-        juliacall>=0.9.20 \
-        juliapkg>=0.1.10 \
-        numpy>=1.24 \
-        autogen-agentchat>=0.4 \
+RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} \
+        "juliacall>=0.9.20" \
+        "juliapkg>=0.1.10" \
+        "numpy>=1.24" \
+        "autogen-agentchat>=0.4" \
         "autogen-ext[openai]>=0.4" \
-        streamlit>=1.34 \
-        python-dotenv>=1.0 \
-        cryptography>=41.0 \
-    && pip install --no-cache-dir -e /tmp/pyjutrack_src
+        "streamlit>=1.34" \
+        "python-dotenv>=1.0" \
+    && pip install --no-cache-dir -i ${PIP_INDEX_URL} -e /tmp/pyjutrack_src
 
 # Copy the BRILLIANCE app
 COPY . /app

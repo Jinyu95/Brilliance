@@ -1,39 +1,59 @@
 # BRILLIANCE — docker compose entry point
 #
-# Usage:
-#   cp .env.example .env          # set LLM_API_KEY etc.
-#   docker compose up --build     # first time: builds image, precompiles Julia
-#   docker compose up             # subsequent launches: instant start
+# Standard:
+#   cp .env.example .env && <edit LLM_API_KEY>
+#   docker compose up --build
 #
-# The image is tagged "brilliance:latest".
+# Mirrors (if Docker Hub / julialang.org / PyPI are unreachable):
+#   docker compose --profile mirror up --build
+#
 # Data produced by the agent (sessions/, workspace/) is persisted via volumes.
 
+x-app-base: &app-base
+  build:
+    context: .
+    dockerfile: scripts/Dockerfile.jutrack
+  image: brilliance:latest
+  ports:
+    - "8501:8501"
+  env_file:
+    - .env
+  environment:
+    EXECUTOR: local
+    JUTRACK_PYTHON: ""
+    JUTRACK_JL_PROJECT: /opt/JuTrack.jl
+    JULIA_PKG_OFFLINE: "true"
+  volumes:
+    - ./sessions:/app/sessions
+    - ./workspace:/app/workspace
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 15s
+
 services:
+  # ── Standard service (default) ──────────────────────────────────────────────
   app:
+    <<: *app-base
+    profiles: ["", "default"]
+
+  # ── Mirror service ─────────────────────────────────────────────────────
+  # Activated with:  docker compose --profile mirror up --build
+  #
+  # Uses:
+  #   Base image : dockerpull.org mirror of python:3.11-slim
+  #   Julia      : BFSU mirror (Beijing Foreign Studies University)
+  #   pip        : Tsinghua TUNA mirror
+  app-cn:
+    <<: *app-base
+    profiles: ["mirror"]
     build:
       context: .
       dockerfile: scripts/Dockerfile.jutrack
-    image: brilliance:latest
-    ports:
-      - "8501:8501"
-    env_file:
-      - .env
-    environment:
-      # Use local executor inside the container (no nested Docker)
-      EXECUTOR: local
-      # pyJuTrack is installed into the container's site-packages
-      JUTRACK_PYTHON: ""
-      # JuTrack.jl is at /opt/JuTrack.jl inside the image
-      JUTRACK_JL_PROJECT: /opt/JuTrack.jl
-      JULIA_PKG_OFFLINE: "true"
-    volumes:
-      # Persist generated sessions and workspace files across restarts
-      - ./sessions:/app/sessions
-      - ./workspace:/app/workspace
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
+      args:
+        BASE_IMAGE: "dockerpull.org/library/python:3.11-slim"
+        JULIA_MIRROR: "https://mirrors.bfsu.edu.cn/julia-releases/bin/linux/x64/1.10"
+        PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
