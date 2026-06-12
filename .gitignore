@@ -21,6 +21,9 @@ env/
 .env
 *.env.local
 
+# Local Docker mirror overrides (user-specific, not for repo)
+docker-compose.override.yml
+
 # Julia depot (pre-compiled packages baked into Docker; too large for git)
 julia_depot/
 

@@ -1,0 +1,19 @@
+# Mirror overrides for restricted networks.
+#
+# Step 1 (one-time) — pull the Python base image locally:
+#   PowerShell:  .\scripts\pull_base.ps1
+#   bash:        bash scripts/pull_base.sh
+#
+# Step 2 — copy this file and build:
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   docker compose up --build
+#
+# Once the base image is local, Docker never contacts Docker Hub again.
+# The args below redirect Julia and pip downloads to reachable mirrors.
+
+services:
+  app:
+    build:
+      args:
+        JULIA_MIRROR: "https://mirrors.bfsu.edu.cn/julia-releases/bin/linux/x64/1.11"
+        PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"

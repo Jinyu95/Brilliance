@@ -4,56 +4,32 @@
 #   cp .env.example .env && <edit LLM_API_KEY>
 #   docker compose up --build
 #
-# Mirrors (if Docker Hub / julialang.org / PyPI are unreachable):
-#   docker compose --profile mirror up --build
-#
-# Data produced by the agent (sessions/, workspace/) is persisted via volumes.
-
-x-app-base: &app-base
-  build:
-    context: .
-    dockerfile: scripts/Dockerfile.jutrack
-  image: brilliance:latest
-  ports:
-    - "8501:8501"
-  env_file:
-    - .env
-  environment:
-    EXECUTOR: local
-    JUTRACK_PYTHON: ""
-    JUTRACK_JL_PROJECT: /opt/JuTrack.jl
-    JULIA_PKG_OFFLINE: "true"
-  volumes:
-    - ./sessions:/app/sessions
-    - ./workspace:/app/workspace
-  restart: unless-stopped
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
-    interval: 30s
-    timeout: 10s
-    retries: 3
-    start_period: 15s
+# If registries are unreachable (see README → Restricted networks):
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   docker compose up --build        ← same command, override is merged automatically
 
 services:
-  # ── Standard service (default) ──────────────────────────────────────────────
   app:
-    <<: *app-base
-    profiles: ["", "default"]
-
-  # ── Mirror service ─────────────────────────────────────────────────────
-  # Activated with:  docker compose --profile mirror up --build
-  #
-  # Uses:
-  #   Base image : dockerpull.org mirror of python:3.11-slim
-  #   Julia      : BFSU mirror (Beijing Foreign Studies University)
-  #   pip        : Tsinghua TUNA mirror
-  app-cn:
-    <<: *app-base
-    profiles: ["mirror"]
     build:
       context: .
       dockerfile: scripts/Dockerfile.jutrack
-      args:
-        BASE_IMAGE: "dockerpull.org/library/python:3.11-slim"
-        JULIA_MIRROR: "https://mirrors.bfsu.edu.cn/julia-releases/bin/linux/x64/1.10"
-        PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+    image: brilliance:latest
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      EXECUTOR: local
+      JUTRACK_PYTHON: ""
+      JUTRACK_JL_PROJECT: /opt/JuTrack.jl
+      JULIA_PKG_OFFLINE: "true"
+    volumes:
+      - ./sessions:/app/sessions
+      - ./workspace:/app/workspace
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

@@ -11,7 +11,7 @@ AI agent for synchrotron storage ring lattice design. A four-agent pipeline (Tas
 The only prerequisite is [Docker Desktop](https://docs.docker.com/get-docker/).
 
 ```bash
-git clone https://github.com/your-org/brilliance.git
+git clone --recurse-submodules https://github.com/your-org/brilliance.git
 cd brilliance
 cp .env.example .env          # then edit .env — set LLM_API_KEY
 docker compose up --build     # first run: ~5 min (compiles Julia + JuTrack)
@@ -25,12 +25,32 @@ Subsequent launches skip compilation and start in seconds:
 docker compose up
 ```
 
-> **Restricted network** — if Docker Hub, julialang.org, or PyPI are unreachable,
-> use the `mirror` profile which routes all downloads through alternative mirrors
-> (dockerpull.org / BFSU Julia / Tsinghua pip):
+> **If you already cloned without `--recurse-submodules`**, fetch the submodule:
 > ```bash
-> docker compose --profile mirror up --build
+> git submodule update --init --recursive
 > ```
+
+> **Restricted network** — if Docker Hub is unreachable, pull the base image
+> from a mirror once, then build normally:
+>
+> ```powershell
+> # Windows (PowerShell)
+> .\scripts\pull_base.ps1
+> ```
+> ```bash
+> # Linux / macOS
+> bash scripts/pull_base.sh
+> ```
+>
+> The script tries several mirrors in order and tags the result as
+> `python:3.11-slim` locally. After that, run the standard build:
+>
+> ```bash
+> cp docker-compose.override.yml.example docker-compose.override.yml
+> docker compose up --build
+> ```
+>
+> The override file redirects Julia and pip downloads to reachable mirrors.
 
 ### LLM configuration
 
