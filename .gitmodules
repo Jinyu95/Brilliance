@@ -1,0 +1,4 @@
+[submodule "JuTrack.jl"]
+	path = JuTrack.jl
+	url = https://github.com/MSU-Beam-Dynamics/JuTrack.jl
+	branch = main
