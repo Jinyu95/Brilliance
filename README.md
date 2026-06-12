@@ -11,7 +11,7 @@ AI agent for synchrotron storage ring lattice design. A four-agent pipeline (Tas
 The only prerequisite is [Docker Desktop](https://docs.docker.com/get-docker/).
 
 ```bash
-git clone --recurse-submodules https://github.com/your-org/brilliance.git
+git clone --recurse-submodules https://github.com/Jinyu95/brilliance.git
 cd brilliance
 cp .env.example .env          # then edit .env — set LLM_API_KEY
 docker compose up --build     # first run: ~5 min (compiles Julia + JuTrack)
