@@ -113,10 +113,20 @@ def create_code_executor(use_docker: bool = True):
         if jutrack_python:
             exe = Path(jutrack_python)
             if exe.is_file():
-                venv_ctx = types.SimpleNamespace(
-                    env_exe=str(exe),
-                    bin_path=str(exe.parent),
-                )
+                # Verify the executable is actually runnable on this platform.
+                # A Windows .exe in a Linux container causes "Exec format error".
+                import platform as _platform
+                _is_win = _platform.system() == "Windows"
+                _is_win_exe = exe.suffix.lower() == ".exe"
+                if _is_win_exe and not _is_win:
+                    # Linux container with a Windows binary — skip, fall through to system python
+                    import sys as _sys
+                    jutrack_python = _sys.executable
+                else:
+                    venv_ctx = types.SimpleNamespace(
+                        env_exe=str(exe),
+                        bin_path=str(exe.parent),
+                    )
 
         # Set JULIA_PROJECT so Julia activates JuTrack.jl regardless of cwd.
         # Without this, running scripts from WORKSPACE_DIR causes PyCallExt

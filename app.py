@@ -407,11 +407,15 @@ def _run_async(coro):
 
 def _push_config():
     """Copy sidebar widget values into environment variables."""
-    os.environ["LLM_MODEL"] = st.session_state.get("_cfg_model", "deepseek-chat")
-    os.environ["LLM_API_KEY"] = st.session_state.get("_cfg_key", "")
-    os.environ["LLM_BASE_URL"] = st.session_state.get("_cfg_url", "https://api.deepseek.com")
-    os.environ["CODE_TIMEOUT"] = str(st.session_state.get("_cfg_timeout", 600))
-    os.environ["EXECUTOR"] = st.session_state.get("_cfg_exec", "local")
+    os.environ["LLM_MODEL"] = st.session_state.get("_cfg_model", os.environ.get("LLM_MODEL", "deepseek-chat"))
+    os.environ["LLM_API_KEY"] = st.session_state.get("_cfg_key", os.environ.get("LLM_API_KEY", ""))
+    os.environ["LLM_BASE_URL"] = st.session_state.get("_cfg_url", os.environ.get("LLM_BASE_URL", "https://api.deepseek.com"))
+    os.environ["CODE_TIMEOUT"] = str(st.session_state.get("_cfg_timeout", int(os.environ.get("CODE_TIMEOUT", "600"))))
+    # Do NOT overwrite EXECUTOR — read-only from env.  User changes go through the selectbox
+    # which writes to st.session_state._cfg_exec, but _push_config should not reset it.
+    _cfg_exec = st.session_state.get("_cfg_exec")
+    if _cfg_exec is not None:
+        os.environ["EXECUTOR"] = _cfg_exec
 
 
 def _show_inline_plots():

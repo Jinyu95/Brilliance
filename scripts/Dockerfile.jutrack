@@ -60,12 +60,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=julia-deps /opt/julia-* /opt/julia/
 COPY --from=julia-deps /opt/julia_depot /opt/julia_depot
 COPY --from=julia-deps /opt/JuTrack.jl /opt/JuTrack.jl
-RUN ln -s /opt/julia/bin/julia /usr/local/bin/julia
+# Add Julia to PATH (do NOT symlink — Julia resolves sys.so relative to argv[0],
+# and a /usr/local/bin/julia symlink leads it to look for /usr/local/lib/julia/sys.so)
+ENV PATH=/opt/julia/bin:$PATH
 
 ENV JULIA_DEPOT_PATH=/opt/julia_depot
 ENV JULIA_PROJECT=/opt/JuTrack.jl
-# No network Julia package resolution at runtime — everything is pre-baked
-ENV JULIA_PKG_OFFLINE=true
 
 WORKDIR /app
 
@@ -75,20 +75,39 @@ WORKDIR /app
 ARG PIP_INDEX_URL=https://pypi.org/simple
 COPY JuTrack.jl/python_integration /tmp/pyjutrack_src
 RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} \
-        "juliacall>=0.9.20" \
-        "juliapkg>=0.1.10" \
+        "juliacall==0.9.31" \
+        "juliapkg==0.1.23" \
         "numpy>=1.24" \
+        "scipy>=1.11" \
         "autogen-agentchat>=0.4" \
-        "autogen-ext[openai]>=0.4" \
+        "autogen-ext[openai,docker]>=0.4" \
         "streamlit>=1.34" \
         "python-dotenv>=1.0" \
+        "docker>=7.0" \
     && pip install --no-cache-dir -i ${PIP_INDEX_URL} -e /tmp/pyjutrack_src
 
 # Copy the BRILLIANCE app
 COPY . /app
+# Remove juliapkg.json so juliacall does not try to re-install JuTrack from
+# the (empty) submodule path. JULIA_PROJECT and pyJuTrack.py's own activation
+# handle the pre-built /opt/JuTrack.jl environment directly.
+RUN rm -rf /app/juliapkg.json /app/JuTrack.jl
 
-# Verify the full Python → Julia → JuTrack chain works
+# Verify the full Python → Julia → JuTrack chain works.
+# This triggers juliapkg.resolve(), which adds PythonCall/OpenSSL_jll to the
+# depot at /opt/julia_depot/environments/pyjuliapkg. Must run with network
+# access; afterwards the depot is fully baked.
 RUN python -c "import pyJuTrack as jt; print('pyJuTrack import OK')" 2>&1
+
+# Remove any host .venv that was copied in — it's a Windows binary on Linux,
+# and config.py picking it up causes "Exec format error".
+# Also remove __pycache__ and workspace artefacts to keep the image clean.
+RUN rm -rf /app/.venv /app/__pycache__ \
+    && find /app -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true \
+    && rm -rf /app/workspace/tmp_code_*.py
+
+# Now that juliapkg has populated the depot, lock package resolution at runtime
+ENV JULIA_PKG_OFFLINE=true
 
 EXPOSE 8501
 

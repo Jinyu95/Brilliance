@@ -30,6 +30,7 @@ from .config import create_model_client, create_code_executor
 from .prompts import (
     planner_prompt,
     codewriter_prompt,
+    exploration_codewriter_prompt,
     reviewer_prompt,
 )
 
@@ -118,10 +119,13 @@ async def run_design(
     *,
     use_docker: bool = False,
     max_messages: int = 28,
+    exploration_mode: bool = False,
 ):
     """Run the full pipeline and return the TaskResult."""
     selector_model_client = create_model_client(role="selector")
     executor = create_code_executor(use_docker)
+
+    _cw_prompt = exploration_codewriter_prompt() if exploration_mode else codewriter_prompt()
 
     async with executor:
         planner = AssistantAgent(
@@ -142,7 +146,7 @@ async def run_design(
                 "Python script using verified code templates."
             ),
             model_client=create_model_client(role="codewriter"),
-            system_message=codewriter_prompt(),
+            system_message=_cw_prompt,
         )
         code_runner = CodeExecutorAgent(
             name=RUNNER,
@@ -186,10 +190,13 @@ async def run_design_stream(
     use_docker: bool = False,
     max_messages: int = 28,
     on_message=None,
+    exploration_mode: bool = False,
 ):
     """Run the pipeline with a per-message callback for UI integration."""
     selector_model_client = create_model_client(role="selector")
     executor = create_code_executor(use_docker)
+
+    _cw_prompt = exploration_codewriter_prompt() if exploration_mode else codewriter_prompt()
 
     async with executor:
         planner = AssistantAgent(
@@ -202,7 +209,7 @@ async def run_design_stream(
             name=CODEWRITER,
             description="Translates TASK SPEC into a pyJuTrack Python script.",
             model_client=create_model_client(role="codewriter"),
-            system_message=codewriter_prompt(),
+            system_message=_cw_prompt,
         )
         code_runner = CodeExecutorAgent(
             name=RUNNER,
@@ -257,6 +264,12 @@ _PROMPTS = {
     REVIEWER:   reviewer_prompt,
 }
 
+_EXPLORATION_PROMPTS = {
+    PLANNER:    planner_prompt,
+    CODEWRITER: exploration_codewriter_prompt,
+    REVIEWER:   reviewer_prompt,
+}
+
 _ROLE_NAMES = {
     PLANNER:    "planner",
     CODEWRITER: "codewriter",
@@ -291,6 +304,7 @@ async def call_agent(
     messages: list[dict],
     *,
     use_docker: bool = False,
+    exploration_mode: bool = False,
 ) -> dict:
     """Call a single agent with the conversation history.
 
@@ -302,6 +316,8 @@ async def call_agent(
         Conversation history as [{"source": str, "content": str, "type": str}].
     use_docker : bool
         Whether to use Docker for code execution (RUNNER only).
+    exploration_mode : bool
+        If True, use the exploration CodeWriter prompt that removes human priors.
 
     Returns
     -------
@@ -332,9 +348,10 @@ async def call_agent(
             response = await agent.on_messages(runner_msgs, ct)
             return {"source": RUNNER, "content": response.chat_message.content}
 
-    if agent_name not in _PROMPTS:
+    _prompts_dict = _EXPLORATION_PROMPTS if exploration_mode else _PROMPTS
+    if agent_name not in _prompts_dict:
         raise ValueError(
-            f"Unknown agent '{agent_name}'. Valid: {list(_PROMPTS.keys()) + [RUNNER]}"
+            f"Unknown agent '{agent_name}'. Valid: {list(_prompts_dict.keys()) + [RUNNER]}"
         )
 
     model_client = create_model_client(role=_ROLE_NAMES.get(agent_name))
@@ -342,7 +359,7 @@ async def call_agent(
     agent = AssistantAgent(
         name=agent_name,
         model_client=model_client,
-        system_message=_PROMPTS[agent_name](),
+        system_message=_prompts_dict[agent_name](),
         **({"tools": _tools, "reflect_on_tool_use": True} if _tools else {}),
     )
     response = await agent.on_messages(auto_msgs, ct)
