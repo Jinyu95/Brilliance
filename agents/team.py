@@ -496,20 +496,22 @@ async def call_agent(
         if thoughts:
             thoughts_text = "\n\n".join(thoughts)
 
-    # Some reasoning models emit the full analysis inside the thinking trace
-    # and produce only a stub (e.g. "We") as the final token.  When the actual
-    # content is suspiciously short and the key decision words are absent,
-    # promote the thoughts text to be the displayed content so the reviewer
-    # verdict is always visible in the chat.
+    # Some reasoning models (deepseek-reasoner, o1, etc.) emit the full
+    # analysis in the thinking trace and produce only an empty or stub string
+    # as the final content.  When this happens to ANY agent, promote the
+    # thoughts text so downstream agents (especially CodeRunner) have something
+    # to work with.
     _DECISION_WORDS = ("TASK_COMPLETE", "NEEDS_FIX", "TASK_FAILED",
-                       "INFEASIBLE_DESIGN", "TASK SPEC", "```python")
-    if (
-        len(content.strip()) < 120
-        and thoughts_text
-        and not any(kw in content for kw in _DECISION_WORDS)
-    ):
+                       "INFEASIBLE_DESIGN", "TASK SPEC", "```python",
+                       "```Python", "import pyJuTrack", "import numpy")
+    _is_stub = (
+        len(content.strip()) < 80
+        or (len(content.strip()) < 200
+            and not any(kw in content for kw in ("```", "TASK", "NEEDS", "COMPLETE")))
+    )
+    if _is_stub and thoughts_text:
         content = thoughts_text
-        thoughts_text = ""   # already promoted; nothing extra to show
+        thoughts_text = ""
 
     result: dict = {"source": agent_name, "content": content}
     if thoughts_text:
