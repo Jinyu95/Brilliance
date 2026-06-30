@@ -64,8 +64,13 @@ RULES
 5. If the user asks which lattice family achieves a target emittance, use
    the compare_lattice_families tool and report the result; do not write
    code in that case — set operation=compare_families and skip the TASK SPEC.
-6. If the user asks for a reference template, use get_reference_design and
-   include its parameter block verbatim in the elements section.
+6. If the user asks for a reference template, use get_reference_design.  BUT:
+   - The template's K1 values and angle_scale are SPECIFIC to its n_cells/energy.
+   - If the user asked for DIFFERENT n_cells or energy, do NOT copy those values
+     into the TASK SPEC.  Instead, note them as "REFERENCE ONLY (retune needed)".
+   - For MBA/7BA/9BA designs: the template topology (element order, drift lengths)
+     can be reused, but K1 must be tuned fresh and angles recomputed from
+     theta = 2*pi/(n_cells * n_bends_per_cell).
 7. Do not add simulation steps the user did not explicitly ask for.
 8. Use validate_task_spec to check your TASK SPEC before finalising it.
 

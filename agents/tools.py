@@ -209,11 +209,28 @@ def get_reference_design(lattice_type: str) -> dict[str, Any]:
     ]
     description = desc_lines[0] if desc_lines else match.stem
 
+    # Add an explicit warning when returning MBA templates — the K1 and
+    # angle_scale values are specific to the template's cell count and energy.
+    _warn_mba = ""
+    if any(kw in key for kw in ("7ba", "std7ba", "mba", "heps", "h7ba", "h6ba")):
+        _warn_mba = (
+            "\n\n⚠ CRITICAL — DO NOT COPY-PASTE:\n"
+            "The K1 values and angle_scale in this template are ONLY valid for\n"
+            "the SPECIFIC n_cells and energy in the template.  If the user\n"
+            "requested DIFFERENT n_cells or energy, you MUST:\n"
+            "  1. Compute theta = 2*pi/(n_cells * 7) from scratch\n"
+            "  2. Tune K1 values FROM SCRATCH (start from ±2.0 m⁻², scan)\n"
+            "  3. Verify cell stability with findm66 BEFORE building the ring\n"
+            "The template topology (element order, drift lengths) can be reused.\n"
+            "The K1 values and angle formula CANNOT."
+        )
+
     return {
         "found": True,
         "filename": match.name,
         "description": description,
         "header": header,
+        "warning": _warn_mba if _warn_mba else None,
     }
 
 
