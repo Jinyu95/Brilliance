@@ -498,8 +498,19 @@ BUG: matplotlib (all backends) crashes for the same reason.
 WORKAROUND: never import matplotlib; use element-wise float(M[i,j]) only.
 
 KNOWN: twissring returns a list of EdwardsTengTwiss objects — access as twiss[i].betax etc.
-KNOWN: twissline for a beamline (not ring) may return a single object, not a list —
-       check type before indexing.
+KNOWN: twissline for a beamline may return a single EdwardsTengTwiss object,
+       NOT a list.  This WILL crash if iterated with enumerate().  Always:
+         tw = jt.twissline(tin, lat, dp=0.0)
+         if not isinstance(tw, (list, tuple)):
+             tw = [tw]  # wrap single object into a list
+         for t in tw:  # now safe
+             print(t.betax, t.betay, t.dx)
+KNOWN: acos(trace/2) returns NaN if |trace| >= 2.  When trace_x
+       is outside [-2,2] the cell is UNSTABLE.  DO NOT compute
+       phase advance or proceed to gettune/ringpara:
+         if abs(trace_x) >= 2 or abs(trace_y) >= 2:
+             print(f'CELL_UNSTABLE: trace_x={tx:.4f} trace_y={ty:.4f}')
+             exit(1)
 KNOWN: T56 = M[4,5] > 0 for normal (non-isochronous) rings in pyJuTrack.
        This is OPPOSITE to MAD-X/AT sign convention. Do not assert T56 < 0.
 
@@ -710,7 +721,9 @@ PHASE 4 — SELECT PHASE ADVANCE VIA HOA
   where n = n_cells × n_bends_per_cell (total unit-cell equivalents).
   If DSCs contain chromatic sextupoles, count them as UC-equivalents in n.
 
-  Call compute_hoa_phase_advance.  For EVERY feasible (Nx,Ny) combination:
+  Call compute_hoa_phase_advance(n_cells=<YOUR N_CELLS>, n_bends_per_cell=<YOUR N_BENDS>).
+  Use the ACTUAL n_cells from the user's request — do NOT change it.
+  For EVERY feasible (Nx,Ny) combination returned by the tool:
     1. Fit the symmetric UC by adjusting quad K1
     2. Record central β_x, central Dx, emittance proxy, natural chromaticity,
        and required quad strengths
@@ -718,7 +731,9 @@ PHASE 4 — SELECT PHASE ADVANCE VIA HOA
        chromaticity, unstable optics, impossible fields, or excessive cell length
     4. Keep only HOA-compatible phase advances inside physically accessible range
 
-  Horizontal phase: usually 40-70°/dipole (constrained by low-β_x requirement).
+  Horizontal phase: MUST be 20-90°/dipole.  REJECT mu_x_dipole > 90°
+  or < 20° — those are physically impossible.  Usually 40-70°/dipole
+  for MBA (constrained by low-β_x requirement).
   Vertical phase: pick the smallest that avoids excessive vertical focusing.
   DO NOT select phase advance to minimize emittance alone.
 
@@ -761,8 +776,15 @@ PHASE 5 — OPTIMIZE THE UNIT CELL WITH INTERPRETABLE SCANS
     separation at sextupoles (would increase required sextupole strength).
 
   Output after optimization:
-    print(f"UNIT_CELL_STABLE: trace_x={tx} trace_y={ty}")
-    print(f"UNIT_CELL_ACHROMATIC: D_exit={Dx} Dp_exit={Dpx}")
+    if abs(tx) >= 2 or abs(ty) >= 2:
+        print(f"UNIT_CELL_UNSTABLE: trace_x={tx:.4f} trace_y={ty:.4f} — aborting")
+        exit(1)
+    print(f"UNIT_CELL_STABLE: trace_x={tx:.4f} trace_y={ty:.4f}")
+    print(f"D_exit={Dx:.6f} Dp_exit={Dpx:.6f}")
+    if abs(Dx) > 0.005:  # > 5 mm dispersion = cell is NOT achromatic
+        print(f"CELL_NOT_ACHROMATIC — D_exit={Dx:.6f} m exceeds 0.005 m threshold")
+        exit(1)
+    print("UNIT_CELL_ACHROMATIC")
     print(f"UNIT_CELL_TWISS_EXIT: betax={bx} betay={by} alphax={ax} alphay={ay} Dx={dx} Dpx={dpx}")
     print("UNIT_CELL_OPTIMIZED")
 

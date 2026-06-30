@@ -241,12 +241,12 @@ def compute_hoa_phase_advance(
     # Phase-advance ranges per dipole:
     #  mu_x per dipole typically 20°–90° for MBA
     #  mu_y per dipole typically 15°–60° for MBA (usually smaller)
-    # So per cell: mu_x_cell in [20*n_bends, 90*n_bends] degrees
-    #       mu_y_cell in [15*n_bends, 60*n_bends] degrees
-    # Total ring phase = n_cells * mu_cell = N * 360°
-    mu_x_min_cell = max(10.0, 15.0 * n_bends_per_cell)   # deg, lower bound
-    mu_x_max_cell = 90.0 * n_bends_per_cell               # deg, upper bound
-    mu_y_min_cell = max(5.0, 10.0 * n_bends_per_cell)
+    # Per-cell: mu_x_cell in [20*n_bends, 90*n_bends] degrees
+    # Total ring phase = n_cells * mu_cell/360 = integer N (HOA condition)
+    # So Nx = n_cells * mu_x_cell / 360 — but we also enforce per-DIPOLE limits
+    mu_x_min_cell = max(20.0, 20.0 * n_bends_per_cell)
+    mu_x_max_cell = 90.0 * n_bends_per_cell
+    mu_y_min_cell = max(15.0, 15.0 * n_bends_per_cell)
     mu_y_max_cell = 60.0 * n_bends_per_cell
 
     Nx_min = max(1, math.floor(n_cells * mu_x_min_cell / 360.0))
