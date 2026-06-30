@@ -649,52 +649,286 @@ print("SELF_CHECK_PASSED")
 # ─────────────────────────────────────────────────────────────────────────────
 
 ═══════════════════════════════════════════════════════════════════════════════
-MBA (MULTI-BEND ACHROMAT) METHODOLOGY — MANDATORY for any 7BA/9BA/H7BA/MBA design
+MBA (MULTI-BEND ACHROMAT) CONSTRUCTION PROTOCOL — FOLLOW THIS EXACT ORDER
 ═══════════════════════════════════════════════════════════════════════════════
 
-When the user requests design of an MBA lattice (7BA, 9BA, H7BA, H6BA, MBA),
-do NOT copy-paste reference K1 values from one cell count to another. The
-correct way to build an MBA:
+CORE PRINCIPLE: Do NOT globally optimize all magnet strengths at once.
+Build and validate substructures one at a time in this exact order:
+  UnitCell —> DispersionSuppressionCell —> StraightMatcher —> Full Ring
 
-1. RING CLOSURE: Compute per-dipole bending angle ALWAYS from first principles.
-   theta = 2 * pi / (n_cells * n_bends_per_cell)   # ALWAYS verify this
-   DO NOT use angle_scale or copy from the template. Compute theta fresh.
+For EVERY MBA design request (7BA, 9BA, H7BA, H6BA, MBA), your script
+MUST execute the following phases in order.  Skip no phase.
 
-2. QUADRUPOLE STRENGTHS ARE CELL-COUNT DEPENDENT. K1 values that work for
-   24 cells WILL crash for 20 cells (and vice versa). The phase advance per
-   cell changes with cell count, requiring different K1 values. Use the
-   search_stable_configuration or optimize_stable_k1 approach.
+───────────────────────────────────────────────────────────────────────────────
+PHASE 1 — DEFINE THE DESIGN CONTRACT
+───────────────────────────────────────────────────────────────────────────────
+(a) Write an ordered list of goals at the top of the script as a comment block.
+    Priority order (customize to the request, but emittance is usually first):
+      1. Low emittance  (target: <X pm·rad)
+      2. HOA phase structure and robustness
+      3. Acceptable αc (min: <value>)
+      4. Compact circumference (limit: <value> m)
+      5. Low chromatic sextupole strength (|k2| < 500 m⁻³)
+      6. Dynamic aperture and injection acceptance
+      7. Engineering simplicity
+    Never allow a lower-priority objective to silently violate a higher one.
 
-3. SELF-CHECK FIRST: Before calling gettune/twissring/ringpara, verify the
-   cell is stable using findm66:
-     M = jt.findm66(cell, dp=0.0)
-     trace_x = M[0,0] + M[1,1]  → must have |trace_x| < 2
-     trace_y = M[2,2] + M[3,3]  → must have |trace_y| < 2
-   If the cell is unstable, the ring WILL segfault. Fix the cell first.
+(b) List hard constraints: E_GeV, particle species, n_cells, n_bends_per_cell,
+    circumference limit, αc_min, B_max_dipole, G_max_quad, min_element_length.
 
-4. K1 TUNING: Start with uniform K1 values (~2.0 for QF, ~-2.0 for QD) then
-   iteratively tune. If trace is out of range, adjust K1 by ±20% and re-check.
+(c) Call estimate_mba_emittance and check_design_feasibility.  If INFEASIBLE
+    or MARGINAL, report the binding constraint and STOP — do not fabricate.
 
-5. MBA TOPOLOGY: The canonical element order matters:
-   DS - Q1 - B1 - Q3 - SD1 - Q4 - SF1 - B2 - Q5 - SD2 - Q6 - SF2 - B3 - Q7
-   - BC - [mirror of above, sextupoles symmetric]
-   This is a 7-bend achromat with 7 quadrupole families.
+───────────────────────────────────────────────────────────────────────────────
+PHASE 2 — DECOMPOSE ONE SUPERPERIOD
+───────────────────────────────────────────────────────────────────────────────
+  One superperiod = StraightMatcher + DSC + N×UnitCell + mirror DSC + StraightMatcher
 
-6. GRADED DIPOLES for MBA: Use non-uniform dipole angles to compress
-   emittance. Ratios like B1:B2:B3:BC = 0.6:0.8:1.0:1.5 are a STARTING
-   POINT. The sum must equal the per-half-cell bend angle.
-   For 20 cells: half_cell_angle = 2*pi/(20)/2 = pi/20 = 0.1571 rad.
-   Then B1+B2+B3+BC = 0.1571 rad → solve for the scale factor.
+  Call decompose_superperiod to get the component list.
 
-7. ROBINSON SUM: After computing Jx,Jy,Je, verify Jx+Jy+Je ≈ 4.0.
-   Deviation > 0.05 means a code bug, not physics.
+  Three design objects — optimize in order, NOT simultaneously:
+    UnitCell                — emittance, phase advance, chromaticity, sextupole leverage
+    DispersionSuppressionCell — transitions UC exit → zero-dispersion straight
+    StraightMatcher         — matches β functions at straight centre
 
-8. VERIFY BEFORE COMPLETING: Print ALL of: tunes, chromaticities, emittance,
-   alphac, Jx/Jy/Je, Robinson sum, I1-I5. Missing ANY of these means
-   NEEDS_FIX.
+───────────────────────────────────────────────────────────────────────────────
+PHASE 3 — BUILD THE GENERIC SYMMETRIC UNIT CELL
+───────────────────────────────────────────────────────────────────────────────
+  Canonical topology for 7-bend (use build_unit_cell_topology):
+    DS - Q1 - DM1 - Q2 - DM2 - B1 - D1 - Q3 - D2 - SD1 - D3 - Q4 - D4 - SF1
+    - B2 - D1 - Q5 - D2 - SD2 - D3 - Q6 - D4 - SF2 - B3 - D5 - Q7 - D5 - BC
+    - [MIRROR of above, sextupoles SYMMETRIC]
 
-Use these tools when available: estimate_mba_emittance, compute_hoa_phase_advance,
-build_unit_cell_topology, check_design_feasibility.
+  Impose MIRROR SYMMETRY about BC centre.
+  Use STANDARDIZED initial magnet/drift lengths (use the template defaults).
+  Keep β_x and dispersion MINIMAL in the main bends — this directly reduces emittance.
+
+───────────────────────────────────────────────────────────────────────────────
+PHASE 4 — SELECT PHASE ADVANCE VIA HOA
+───────────────────────────────────────────────────────────────────────────────
+  The HOA condition:  n·μ_x/(2π) = N_x,  n·μ_y/(2π) = N_y
+  where n = n_cells × n_bends_per_cell (total unit-cell equivalents).
+  If DSCs contain chromatic sextupoles, count them as UC-equivalents in n.
+
+  Call compute_hoa_phase_advance.  For EVERY feasible (Nx,Ny) combination:
+    1. Fit the symmetric UC by adjusting quad K1
+    2. Record central β_x, central Dx, emittance proxy, natural chromaticity,
+       and required quad strengths
+    3. REJECT phase advances that require unphysical β minima, extreme
+       chromaticity, unstable optics, impossible fields, or excessive cell length
+    4. Keep only HOA-compatible phase advances inside physically accessible range
+
+  Horizontal phase: usually 40-70°/dipole (constrained by low-β_x requirement).
+  Vertical phase: pick the smallest that avoids excessive vertical focusing.
+  DO NOT select phase advance to minimize emittance alone.
+
+  Output block:
+    print("HOA_SELECTED: Nx=<Nx> Ny=<Ny>")
+    print(f"mu_x_cell={mu_x_deg:.2f} deg  mu_y_cell={mu_y_deg:.2f} deg")
+    print(f"mu_x_dipole={mu_x_dipole_deg:.2f} deg  mu_y_dipole={mu_y_dipole_deg:.2f} deg")
+    print("HOA_WORKING_POINT_OK")
+
+───────────────────────────────────────────────────────────────────────────────
+PHASE 5 — OPTIMIZE THE UNIT CELL WITH INTERPRETABLE SCANS
+───────────────────────────────────────────────────────────────────────────────
+  Use findm66 + twissline for fast cell-level diagnostics.  Do not build the
+  ring yet — analyze the single cell.
+
+  Track at minimum: trace_x, trace_y, D_exit(M[0,5]), Dp_exit(M[1,5]),
+  T56(M[4,5]), phase_adv_x (acos(trace_x/2) in deg), phase_adv_y.
+
+  5.1 REVERSE-BEND SCAN (mandatory if RB candidate exists):
+    Try RB angles = [0.0, 0.02, 0.05] × total_half_cell_bend.
+    For each: refit QF/QD to preserve cell symmetry + target phase advance,
+    adjust main-bend angle to preserve total cell deflection.
+    Report trace, D_exit, Dp_exit, phase advance for each.
+    Physics interpretation: larger RB → lower ε, higher Jx, lower αc,
+    may increase energy spread.  Choose the largest RB that keeps αc ≥ αc_min.
+    NEVER optimize RB using emittance alone.
+
+  5.2 MAIN-BEND LENGTH SCAN (if circumference permits):
+    At fixed total bending angle, scan bend length (±30%).
+    Longer bends → better emittance and αc, but consume circumference.
+
+  5.3 GRADED DIPOLE ANGLE SCAN:
+    The standard grading ratios are B1:B2:B3:BC = 0.6:0.8:1.0:1.5.
+    The per-half-cell bend angle = π/n_cells.
+    Scale factor k satisfies: k*(2*0.6 + 2*0.8 + 2*1.0 + 1.5) = π/n_cells
+    Compute k explicitly.  Print every angle and verify they sum correctly.
+
+  5.4 COMBINED-FUNCTION MAIN-BEND (scan optionally):
+    Try gradient main bend via PolynomB.  Reject if it reduces β-function
+    separation at sextupoles (would increase required sextupole strength).
+
+  Output after optimization:
+    print(f"UNIT_CELL_STABLE: trace_x={tx} trace_y={ty}")
+    print(f"UNIT_CELL_ACHROMATIC: D_exit={Dx} Dp_exit={Dpx}")
+    print(f"UNIT_CELL_TWISS_EXIT: betax={bx} betay={by} alphax={ax} alphay={ay} Dx={dx} Dpx={dpx}")
+    print("UNIT_CELL_OPTIMIZED")
+
+───────────────────────────────────────────────────────────────────────────────
+PHASE 6 — PLACE SEXTUPOLES USING CORRECTION LEVERAGE
+───────────────────────────────────────────────────────────────────────────────
+  For EACH sextupole position in the cell:
+    Extract local β_x, β_y, Dx from the UC exit Twiss at that s-position.
+    Call compute_correction_leverage.
+    Report leverage_x, leverage_y, is_effective, recommended k2_range.
+
+  Physics rule:
+    SF → near outer symmetry point where β_x is favourable for X correction.
+    SD → near main bend where β_y leverage is favourable for Y correction.
+    A sextupole at Dx ≈ 0 provides ZERO chromatic correction.
+
+  Choose sextupole strengths by SOLVING for SF/SD K2 that give the target
+  corrected chromaticity.  Print the required K2 values.
+
+  FREEZE the UC only after ALL of:
+    [ ] target phase advance achieved   [ ] symmetric
+    [ ] emittance target satisfied       [ ] αc constraint met
+    [ ] magnet limits (B, G, k2) OK     [ ] natural chromaticity reasonable
+    [ ] SF/SD strengths acceptable       [ ] aperture/geometry OK
+
+  Output: for each sextupole — name, β_x, β_y, Dx, leverage_x, leverage_y,
+  effective?, recommended_k2, required_k2 for target chromaticity.
+  print("SEXTUPOLES_PLACED_OK")
+
+───────────────────────────────────────────────────────────────────────────────
+PHASE 7 — CONSTRUCT THE DISPERSION-SUPPRESSION CELL
+───────────────────────────────────────────────────────────────────────────────
+  The DSC is a CONSTRAINED TRANSFER LINE, not an independently optimized cell.
+
+  Inputs: UC exit Twiss from Phase 5 (β_x, α_x, β_y, α_y, η_x, η'_x).
+  Targets at straight-section boundary: η_x=0, η'_x=0, α_y≈0, β compatible.
+
+  Keep the DSC AS SIMILAR AS POSSIBLE TO HALF THE UNIT CELL — this preserves
+  the HOA phase structure and resonance cancellation.
+
+  Tuning knobs (use ONLY these):
+    1. Outer-bend angle or length
+    2. Offset QD or QF for extra bending
+    3. QF and QD gradients
+    4. Drift lengths near the bend
+    5. Local sextupole location/strength
+    6. Optional octupole space
+
+  Record for EACH DSC solution:
+    local emittance contribution, αc contribution, β_y at straight boundary,
+    vertical chromaticity contribution, required quad strengths,
+    dispersion residuals (η_x, η'_x at exit), available drift space.
+
+  Known patterns:
+    Increase bend length → lower DSC emittance.
+    Increase nearby drift → raise β_y at exit (may increase local emittance).
+
+  Output matching residuals:
+    print(f"DSC_MATCHED: eta_x={eta_x:.6e} eta_px={eta_px:.6e}")
+    print("DSC_MATCHED_OK")
+
+───────────────────────────────────────────────────────────────────────────────
+PHASE 8 — MATCH THE STRAIGHT SECTION AND ASSEMBLE THE LINEAR RING
+───────────────────────────────────────────────────────────────────────────────
+  Use 3-4 quadrupoles near the straight to decouple straight optics from arc.
+
+  At straight centre: target β_x, target β_y, α_x=0, α_y=0, Dx=0, Dpx=0.
+
+  After assembling all superperiods:
+    1. Verify ring closure (total bend = 2π via assertion).
+    2. Verify periodic optics.
+    3. Verify superperiod phase conditions.
+    4. DETUNE the working point ~0.1-0.2 away from exact HOA integer conditions
+       while preserving the HOA structure as much as possible.
+    5. Recompute global radiation integrals and longitudinal parameters.
+
+  Output:
+    print(f"RING_ASSEMBLED: C={circumference:.2f} m")
+    print(f"RING_CLOSURE_CHECK: total_bend={total_bend:.8f} rad")
+    print("RING_ASSEMBLED_OK")
+
+───────────────────────────────────────────────────────────────────────────────
+PHASE 9 — INCORPORATE ENGINEERING CONSTRAINTS
+───────────────────────────────────────────────────────────────────────────────
+  NOT a cosmetic step.  Add and validate every item — rerun optics after each:
+
+    [ ] Maximum dipole field < B_max
+    [ ] Maximum quadrupole gradient < G_max
+    [ ] Maximum sextupole gradient < k2_max
+    [ ] Aperture / pole-tip limits
+    [ ] Minimum magnetic length
+    [ ] Space for synchrotron-radiation absorbers near bends
+    [ ] BPM and orbit corrector locations
+    [ ] Sextupole-integrated correctors
+    [ ] Required drift lengths for diagnostics and installation
+
+  After EVERY engineering modification, rerun:
+    periodic optics, phase advances, radiation integrals, chromaticities,
+    required sextupole strengths, magnet-limit checks.
+
+  Output:
+    print(f"ROBINSON_SUM: Jx+Jy+Je = {robinson:.4f} (expected 4.0)")
+    assert abs(robinson - 4.0) < 0.05, "Robinson sum violation"
+    print("ENGINEERING_CONSTRAINTS_OK")
+
+───────────────────────────────────────────────────────────────────────────────
+PHASE 10 — NONLINEAR OPTIMIZATION READINESS CHECK
+───────────────────────────────────────────────────────────────────────────────
+  The deterministic lattice is NOT the final solution — it is the starting
+  point for nonlinear optimization.  Do NOT run a full MOGA here.
+
+  Verify readiness:
+    [ ] Quick on-momentum DA estimate (6 angles × 512 turns) > 2 mm
+    [ ] Off-momentum DA at δ = ±3%
+    [ ] Tune footprint from particle tracking
+    [ ] Resonance proximity check
+
+  Future nonlinear work (document, don't execute now):
+    - Split shared sextupoles into independent symmetric pairs
+    - Add harmonic sextupole families if needed
+    - Add octupole families for tune-footprint/amplitude-detuning control
+
+  Output:
+    print(f"DA_ESTIMATE_MM: {da_mm:.1f}")
+    print("NONLINEAR_READY")
+
+───────────────────────────────────────────────────────────────────────────────
+GLOBAL OUTPUT REQUIREMENTS (print all at script end)
+───────────────────────────────────────────────────────────────────────────────
+  print("tune_nux : <value>")
+  print("tune_nuy : <value>")
+  print("chromaticity_xix : <value>")
+  print("chromaticity_xiy : <value>")
+  print("emittance : <value>")
+  print("alphac : <value>")
+  print("U0_eV : <value>  # computed analytically, NOT from rp['U0']")
+  print("sigma_E : <value>")
+  print("Jx : <value>")
+  print("Jy : <value>")
+  print("Je : <value>")
+  print("Robinson_sum : <value>  # must be 4.0 ± 0.05")
+  print("I1 : <value>")
+  print("I2 : <value>")
+  print("I3 : <value>")
+  print("I4 : <value>")
+  print("I5 : <value>")
+  print("circumference : <value>")
+  print("energy_gev : <value>")
+  print("SELF_CHECK_PASSED")
+
+  Include --- LATTICE RESULT JSON --- block with all fields above.
+
+───────────────────────────────────────────────────────────────────────────────
+CRITICAL REMINDERS
+───────────────────────────────────────────────────────────────────────────────
+  • NEVER copy-paste reference K1 values between different cell counts.
+  • ALWAYS compute theta = 2π/(n_cells × n_bends_per_cell) from scratch.
+  • ALWAYS verify cell stability with findm66 BEFORE building the ring.
+  • ALWAYS compute U0 analytically: U0_eV = 8.85e-5*(E_GeV**4)*I2/(2π)*1e9
+  • NEVER use numpy matmul (@, np.dot) — BLAS crash on Windows.
+  • NEVER import matplotlib — same BLAS crash.
+  • ringpara returns DICT — use rp['key'], not rp.key.
+
+Use available MBA tools: estimate_mba_emittance, compute_hoa_phase_advance,
+build_unit_cell_topology, decompose_superperiod, compute_correction_leverage,
+check_dsc_matching_conditions, validate_mba_construction_step.
 """
 
 
