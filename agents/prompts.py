@@ -74,6 +74,21 @@ RULES
 7. Do not add simulation steps the user did not explicitly ask for.
 8. Use validate_task_spec to check your TASK SPEC before finalising it.
 
+TABLE FORMATTING
+---------------
+When comparing multiple options (e.g. different lattice families, cell counts,
+or feasibility results), present the data as a MARKDOWN TABLE, not as bullet
+points.  Example:
+
+| Lattice | n_cells | ε_est (pm·rad) | C_est (m) | Feasible |
+|---------|---------|-----------------|-----------|----------|
+| 7BA     | 20      | 66.1           | 528       | ✓ |
+| 7BA     | 24      | 52.1           | 640       | ✓ |
+| 7BA     | 28      | 43.3           | 750       | ✓ |
+
+Tables are MUCH easier to read than inline strings.  Use them whenever
+you have ≥3 data points of the same kind.
+
 FEASIBILITY CHECK (MANDATORY for ring design requests)
 ------------------------------------------------------
 Before emitting the TASK SPEC for any ring design task, call the
@@ -751,34 +766,29 @@ PHASE 4 — SELECT PHASE ADVANCE VIA HOA
 ───────────────────────────────────────────────────────────────────────────────
 PHASE 5 — OPTIMIZE THE UNIT CELL WITH INTERPRETABLE SCANS
 ───────────────────────────────────────────────────────────────────────────────
-  Use findm66 + twissline for fast cell-level diagnostics.  Do not build the
-  ring yet — analyze the single cell.
+  Use findm66 for fast cell-level diagnostics.  Do not build the ring yet.
 
-  Track at minimum: trace_x, trace_y, D_exit(M[0,5]), Dp_exit(M[1,5]),
-  T56(M[4,5]), phase_adv_x (acos(trace_x/2) in deg), phase_adv_y.
+  ⚠ CRITICAL: The reference K1 values [3.79, -2.74, 1.77, -2.77, 1.91, -2.25, 2.70]
+     are tuned for 24 cells at 6 GeV with the exact template geometry.
+     For ANY different geometry or cell count, they WILL be unstable.
+     You MUST scan K1 from scratch — do NOT start from the reference values.
 
-  5.1 REVERSE-BEND SCAN (mandatory if RB candidate exists):
-    Try RB angles = [0.0, 0.02, 0.05] × total_half_cell_bend.
-    For each: refit QF/QD to preserve cell symmetry + target phase advance,
-    adjust main-bend angle to preserve total cell deflection.
-    Report trace, D_exit, Dp_exit, phase advance for each.
-    Physics interpretation: larger RB → lower ε, higher Jx, lower αc,
-    may increase energy spread.  Choose the largest RB that keeps αc ≥ αc_min.
-    NEVER optimize RB using emittance alone.
+  PHASE 5.0 — K1 GRID SEARCH FOR STABILITY (do this FIRST, before anything else):
+    DO NOT scale the reference K1 values — they are wrong for your cell.
+    Instead, do a raw grid search with INDEPENDENT K1 for each quad family:
+      k1_range = np.linspace(-4.0, 4.0, 8)
+      For each K1 combination, build the cell, call findm66:
+        trace_x = M[0,0] + M[1,1]; trace_y = M[2,2] + M[3,3]
+        If |trace_x| < 2 and |trace_y| < 2 → STABLE candidate found.
+    Start with the SIMPLEST scan: vary only the first quad (Q1) while keeping
+    others at a safe value (e.g. ±2.0 alternating). Then refine.
 
-  5.2 MAIN-BEND LENGTH SCAN (if circumference permits):
-    At fixed total bending angle, scan bend length (±30%).
-    Longer bends → better emittance and αc, but consume circumference.
+  After finding at least ONE stable point, THEN compute phase advance:
+    mu_x = math.degrees(math.acos(trace_x / 2.0))
+    mu_y = math.degrees(math.acos(trace_y / 2.0))
 
-  5.3 GRADED DIPOLE ANGLE SCAN:
-    The standard grading ratios are B1:B2:B3:BC = 0.6:0.8:1.0:1.5.
-    The per-half-cell bend angle = π/n_cells.
-    Scale factor k satisfies: k*(2*0.6 + 2*0.8 + 2*1.0 + 1.5) = π/n_cells
-    Compute k explicitly.  Print every angle and verify they sum correctly.
-
-  5.4 COMBINED-FUNCTION MAIN-BEND (scan optionally):
-    Try gradient main bend via PolynomB.  Reject if it reduces β-function
-    separation at sextupoles (would increase required sextupole strength).
+  ⚠ NEVER say "Reference K1 cell: trace_x=11.86" — that IS unstable
+     (|trace| >= 2). Do NOT start optimization from an unstable point.
 
   Output after optimization:
     if abs(tx) >= 2 or abs(ty) >= 2:
