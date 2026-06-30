@@ -510,3 +510,27 @@ PLANNER_TOOLS = [
     validate_task_spec,
     check_design_feasibility,
 ]
+
+# ── MBA tools ────────────────────────────────────────────────────────────────
+
+from .mba_tools import (  # noqa: E402
+    compute_hoa_phase_advance,
+    build_unit_cell_topology,
+    decompose_superperiod,
+    compute_correction_leverage,
+    check_dsc_matching_conditions,
+    validate_mba_construction_step,
+    estimate_mba_emittance,
+)
+
+MBA_TOOLS = [
+    compute_hoa_phase_advance,
+    build_unit_cell_topology,
+    decompose_superperiod,
+    compute_correction_leverage,
+    check_dsc_matching_conditions,
+    validate_mba_construction_step,
+    estimate_mba_emittance,
+]
+
+PLANNER_TOOLS.extend(MBA_TOOLS)

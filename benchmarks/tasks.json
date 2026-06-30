@@ -64,5 +64,102 @@
     "max_messages": 16,
     "expected_outcome": "refusal",
     "required_binding_constraint": "target_emittance"
+  },
+
+  {
+    "id": "mba_design_contract",
+    "prompt": "MBA STAGE 1: Define the design contract for a 6 GeV 7-bend achromat storage ring with 24 superperiods targeting emittance below 50 pm-rad and circumference around 500 m. List hard constraints and ranked goals. Use estimate_mba_emittance and check_design_feasibility tools.",
+    "require_stable": false,
+    "minimum_score": 70,
+    "max_messages": 20,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "mba_decompose_superperiod",
+    "prompt": "MBA STAGE 2: Decompose one superperiod of a 24-cell 7BA ring into: StraightMatcher + DSC + N x UnitCell + mirror DSC + StraightMatcher. Use the decompose_superperiod tool. Report the number of unit cells per period.",
+    "require_stable": false,
+    "minimum_score": 70,
+    "max_messages": 20,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "mba_unit_cell_topology",
+    "prompt": "MBA STAGE 3: Build the generic symmetric unit cell for a 7BA using build_unit_cell_topology. Identify quadrupole families, sextupole positions (SF near outer symmetry, SD near main bends), and the mirror axis.",
+    "require_stable": false,
+    "minimum_score": 70,
+    "max_messages": 20,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "mba_hoa_phase",
+    "prompt": "MBA STAGE 4: Compute all valid Higher-Order-Achromat phase advances for a 24-superperiod 7BA ring (168 total dipoles) using compute_hoa_phase_advance. Report valid (Nx, Ny) pairs, per-dipole phase advances, and flag resonance warnings.",
+    "require_stable": false,
+    "minimum_score": 70,
+    "max_messages": 20,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "mba_uc_optimization",
+    "prompt": "MBA STAGE 5: Using the 7BA unit cell topology and HOA phase advance target (~55 deg/dipole X, ~30 deg/dipole Y), write a pyJuTrack script that optimizes 7 quadrupole K1 values to achieve the target phase advance while keeping the cell achromatic (D_exit ~ 0, Dp_exit ~ 0). Scan reverse-bend fraction (0%, 2%, 5% of total bend). Report trace_x, trace_y, D_exit, Dp_exit, and mu_x/mu_y for the best configuration.",
+    "require_stable": true,
+    "minimum_score": 60,
+    "max_messages": 40,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "mba_sextupole_placement",
+    "prompt": "MBA STAGE 6: For a 7BA unit cell at 6 GeV, place chromatic sextupoles using compute_correction_leverage. Assume SF positions have beta_x~15m, beta_y~5m, Dx~0.3m. SD positions have beta_x~5m, beta_y~10m, Dx~0.2m. Report leverage_x, leverage_y, is_effective, and recommended K2 range for each position.",
+    "require_stable": false,
+    "minimum_score": 65,
+    "max_messages": 20,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "mba_dsc_construction",
+    "prompt": "MBA STAGE 7: Construct a Dispersion Suppression Cell that matches typical 7BA unit cell exit Twiss (beta_x~12m, alpha_x~0.2, beta_y~5m, alpha_y~0.1, Dx~0.25m, Dpx~-0.01) to a zero-dispersion straight (Dx=0, Dpx=0, beta_x~10m, beta_y~3m). Use check_dsc_matching_conditions. Report required quadrupole families and feasibility.",
+    "require_stable": true,
+    "minimum_score": 60,
+    "max_messages": 36,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "mba_straight_matching",
+    "prompt": "MBA STAGE 8: Match a straight section (4 quadrupoles, 5 m length) to connect the DSC exit to the unit cell entrance. Target beta_x=10m, beta_y=3m, alpha_x=0, alpha_y=0, Dx=0 at straight centre. Write a pyJuTrack script using EdwardsTengTwiss + twissline.",
+    "require_stable": true,
+    "minimum_score": 60,
+    "max_messages": 36,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "mba_ring_assembly_linear",
+    "prompt": "MBA STAGE 9: Assemble a 6 GeV 7BA ring with 24 superperiods. Use the std7ba_6gev template topology. Verify: total bend=2*pi, tunes away from integer/half-integer, Robinson sum Jx+Jy+Je=4.0 +/- 0.05, U0 from analytical formula, emittance below 100 pm-rad.",
+    "require_stable": true,
+    "minimum_score": 55,
+    "max_messages": 40,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "mba_nonlinear_check",
+    "prompt": "MBA STAGE 10: For the 6 GeV 7BA ring from stage 9, perform a nonlinear readiness check: compute quick on-momentum DA estimate (6 angles x 512 turns), check dipole field < 1.8 T, quad gradient < 50 T/m, sextupole |k2| < 500 m^-3. Report DA area estimate in mm^2.",
+    "require_stable": true,
+    "minimum_score": 50,
+    "max_messages": 40,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "mba_quality_validation",
+    "prompt": "VALIDATE an MBA lattice design: verify the Robinson sum is 4.0 +/- 0.01, U0 matches analytical formula within 5%, natural chromaticities are correctable with |k2| < 500 m^-3, and emittance is within 5x the theoretical TME floor for 7BA at 6 GeV/24 cells (TME floor ~24 pm-rad).",
+    "require_stable": true,
+    "minimum_score": 50,
+    "max_messages": 36,
+    "expected_outcome": "design"
+  },
+  {
+    "id": "mba_hoa_enforcement",
+    "prompt": "MBA HOA ENFORCEMENT: Verify that a 168-dipole (24 cells x 7 bends) MBA ring has tune values consistent with the HOA condition n*mu/(2*pi) = integer. The ring tune should NOT be a random fractional value — it must come from the discrete HOA set. Use compute_hoa_phase_advance to enumerate valid options and check the working point against them.",
+    "require_stable": true,
+    "minimum_score": 60,
+    "max_messages": 30,
+    "expected_outcome": "design"
   }
 ]

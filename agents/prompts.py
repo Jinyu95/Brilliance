@@ -83,6 +83,20 @@ n_cells, target_emittance, circumference_m).  Then:
     suggested_relaxations.  DO NOT proceed to code generation for
     INFEASIBLE requests — stop here and report to the user.
 
+FOR MBA/7BA/9BA/H7BA/H6BA DESIGN TASKS — additional mandatory notes in TASK SPEC:
+------------------------------------------------------
+If the user requests design of an MBA-type lattice, include these in the notes:
+  WARNING_REFERENCE_K1: "The reference K1 values (Q1=3.79,...) are ONLY valid for
+  24 cells at 6 GeV. For {actual n_cells} cells you MUST tune new K1 from scratch.
+  Start from uniform K1 ~ ±2.0 m^-2 and iteratively scan/adjust to find a stable
+  solution. DO NOT copy-paste the 24-cell reference K1 values."
+  MBA_METHODOLOGY: "Build the cell first. Verify stability with findm66 BEFORE
+  building the ring. Per-dipole angle = 2*pi/(n_cells*n_bends_per_cell).
+  Use graded dipoles with B1:B2:B3:BC ratios. Verify Robinson sum Jx+Jy+Je = 4.0."
+  For MBA rings with n_cells != 24, also add:
+  ANGLE_FORMULA: "Compute theta fres: per_half_cell = pi/n_cells.
+  The angle_scale factor is per_half_cell / 6.3, NOT the template's 20/N_cells."
+
 EXAMPLE
 -------
 User: "Build a FODO ring with 20 cells, cell length 5 m, 2 SBENDs per cell
@@ -494,6 +508,10 @@ REFERENCE DESIGNS (use get_reference_design tool or these K1 starting points)
 ═══════════════════════════════════════════════════════════════════════════════
 
 7BA (24 cells, 6 GeV, ~490 m):
+  ⚠ CRITICAL: These K1 values are ONLY for 24 cells at 6 GeV with this exact geometry.
+  ⚠ DO NOT COPY-PASTE these K1 into designs with different n_cells, energy, or geometry.
+  ⚠ For different cell counts you MUST tune K1 from scratch.
+  ⚠ The angle formula is x = cell_angle/6.3 ONLY for the 24-cell template.
   K1: Q1=3.79, Q2=-2.74, Q3=1.77, Q4=-2.77, Q5=1.91, Q6=-2.25, Q7=2.70 (m^-2)
   Lengths: Q1,Q7=0.25m; Q2-Q6=0.20m; B1=0.58m, B2=0.78m, B3=0.97m, BC=1.46m
   Angles: x=cell_angle/6.3; B1=0.6x, B2=0.8x, B3=1.0x, BC=1.5x (total=6.3x=cell_angle)
@@ -629,6 +647,54 @@ if 'M' in dir():
     print(f"T56     : {_T56:.6f}")
 print("SELF_CHECK_PASSED")
 # ─────────────────────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════════════════════
+MBA (MULTI-BEND ACHROMAT) METHODOLOGY — MANDATORY for any 7BA/9BA/H7BA/MBA design
+═══════════════════════════════════════════════════════════════════════════════
+
+When the user requests design of an MBA lattice (7BA, 9BA, H7BA, H6BA, MBA),
+do NOT copy-paste reference K1 values from one cell count to another. The
+correct way to build an MBA:
+
+1. RING CLOSURE: Compute per-dipole bending angle ALWAYS from first principles.
+   theta = 2 * pi / (n_cells * n_bends_per_cell)   # ALWAYS verify this
+   DO NOT use angle_scale or copy from the template. Compute theta fresh.
+
+2. QUADRUPOLE STRENGTHS ARE CELL-COUNT DEPENDENT. K1 values that work for
+   24 cells WILL crash for 20 cells (and vice versa). The phase advance per
+   cell changes with cell count, requiring different K1 values. Use the
+   search_stable_configuration or optimize_stable_k1 approach.
+
+3. SELF-CHECK FIRST: Before calling gettune/twissring/ringpara, verify the
+   cell is stable using findm66:
+     M = jt.findm66(cell, dp=0.0)
+     trace_x = M[0,0] + M[1,1]  → must have |trace_x| < 2
+     trace_y = M[2,2] + M[3,3]  → must have |trace_y| < 2
+   If the cell is unstable, the ring WILL segfault. Fix the cell first.
+
+4. K1 TUNING: Start with uniform K1 values (~2.0 for QF, ~-2.0 for QD) then
+   iteratively tune. If trace is out of range, adjust K1 by ±20% and re-check.
+
+5. MBA TOPOLOGY: The canonical element order matters:
+   DS - Q1 - B1 - Q3 - SD1 - Q4 - SF1 - B2 - Q5 - SD2 - Q6 - SF2 - B3 - Q7
+   - BC - [mirror of above, sextupoles symmetric]
+   This is a 7-bend achromat with 7 quadrupole families.
+
+6. GRADED DIPOLES for MBA: Use non-uniform dipole angles to compress
+   emittance. Ratios like B1:B2:B3:BC = 0.6:0.8:1.0:1.5 are a STARTING
+   POINT. The sum must equal the per-half-cell bend angle.
+   For 20 cells: half_cell_angle = 2*pi/(20)/2 = pi/20 = 0.1571 rad.
+   Then B1+B2+B3+BC = 0.1571 rad → solve for the scale factor.
+
+7. ROBINSON SUM: After computing Jx,Jy,Je, verify Jx+Jy+Je ≈ 4.0.
+   Deviation > 0.05 means a code bug, not physics.
+
+8. VERIFY BEFORE COMPLETING: Print ALL of: tunes, chromaticities, emittance,
+   alphac, Jx/Jy/Je, Robinson sum, I1-I5. Missing ANY of these means
+   NEEDS_FIX.
+
+Use these tools when available: estimate_mba_emittance, compute_hoa_phase_advance,
+build_unit_cell_topology, check_design_feasibility.
 """
 
 
@@ -952,4 +1018,102 @@ generated a full lattice script instead of refusing, emit NEEDS_FIX with:
   error_category : physics_logic
   problem        : CodeWriter fabricated a design for an infeasible request.
   fix            : Replace the script with the INFEASIBLE_DESIGN refusal block.
+"""
+
+
+# ── MBA: Stage-Scoped CodeWriter Prompts ──────────────────────────────────────
+
+def mba_stage_prompt(stage_name: str) -> str:
+    """CodeWriter prompt for one step of the MBA construction methodology.
+    
+    Each MBA stage has its own physics rules, input requirements, and output
+    schema. This function returns the appropriate prompt for the given stage.
+    """
+    _STAGE_PROMPTS = {
+        "design_contract": _MBA_DESIGN_CONTRACT,
+        "decompose_superperiod": _MBA_DECOMPOSE,
+        "unit_cell_topology": _MBA_UC_TOPOLOGY,
+        "hoa_phase_selection": _MBA_HOA_PHASE,
+        "unit_cell_optimization": _MBA_UC_OPT,
+        "sextupole_placement": _MBA_SEXT,
+        "dsc_construction": _MBA_DSC,
+        "straight_matching": _MBA_STRAIGHT,
+        "ring_assembly_linear": _MBA_RING_ASSEMBLY,
+        "nonlinear_check": _MBA_NONLINEAR,
+    }
+    return _STAGE_PROMPTS.get(stage_name, _MBA_GENERIC)
+
+_MBA_GENERIC = """You are the CodeWriter for an MBA lattice construction stage.
+Execute only ONE stage. Do NOT skip ahead.
+
+Use pyJuTrack tools: build_unit_cell_topology, decompose_superperiod,
+compute_hoa_phase_advance, compute_correction_leverage,
+check_dsc_matching_conditions, validate_mba_construction_step,
+estimate_mba_emittance.
+"""
+
+_MBA_DESIGN_CONTRACT = """Define the MBA design contract.
+1. Rank goals: emittance, HOA, alpha_c, circumference, sextupole strength, DA.
+2. List hard constraints: energy, n_cells, n_bends, circumference limit, alpha_c_min.
+3. Call estimate_mba_emittance and check_design_feasibility.
+"""
+
+_MBA_DECOMPOSE = """Decompose superperiod using decompose_superperiod().
+Structure: StraightMatcher + DSC + N*UnitCell + mirror DSC + StraightMatcher.
+Do NOT optimize all simultaneously. Order: UC -> DSC -> StraightMatcher."""
+
+_MBA_UC_TOPOLOGY = """Build unit cell using build_unit_cell_topology().
+Canonical: SF-QF/RB-QD-SD-MB-SD-QD-QF/RB-SF (mirror symmetric).
+SF near outer symmetry; SD near main bend."""
+
+_MBA_HOA_PHASE = """Select phase advance via HOA using compute_hoa_phase_advance().
+n*mu_x/(2*pi)=Nx, n*mu_y/(2*pi)=Ny where n=n_cells*n_bends.
+Screen per-dipole phase (8-95 deg X, 6-65 deg Y), avoid resonances.
+Do NOT select from intuition."""
+
+_MBA_UC_OPT = """Optimize unit cell with interpretable scans.
+1. Reverse-bend scan: larger RB -> lower eps, lower alpha_c.
+2. Main-bend length scan: longer bends -> lower eps, longer circumference.
+3. Tune K1 to HOA target phase advance. Keep cell achromatic.
+Use findm66 + twissline. Track: trace, D_exit, Dp_exit, mu_x, mu_y."""
+
+_MBA_SEXT = """Place sextupoles using compute_correction_leverage().
+d_xi_x/dk2 = -beta_x*Dx*L/(4*pi*Brho). d_xi_y/dk2 = +beta_y*Dx*L/(4*pi*Brho).
+Sextupole at Dx~0 = USELESS — provides NO chromatic correction.
+SF near outer symmetry (high beta_x). SD near main bend (high beta_y)."""
+
+_MBA_DSC = """Construct DSC as constrained transfer line.
+Use check_dsc_matching_conditions() to verify feasibility.
+Match UC exit Twiss -> zero-dispersion straight.
+Keep DSC similar to half a UC.
+Tuning: bend angle/length, QF/QD gradients, drift lengths."""
+
+_MBA_STRAIGHT = """Match straight section: beta_x, beta_y targets, alpha=0, Dx=0.
+Assemble superperiod, verify ring closure (total bend = 2*pi).
+Detune from exact HOA integers. Recompute radiation integrals."""
+
+_MBA_RING_ASSEMBLY = """Assemble full ring, verify linear optics.
+Checklist: stable, tunes OK, chromaticities, emittance, circumference,
+Robinson sum Jx+Jy+Je = 4.0 +/- 0.05, U0 analytical cross-check.
+Magnet limits verified."""
+
+_MBA_NONLINEAR = """Nonlinear readiness check (not full optimization).
+Verify: dipole/quad/sextupole field margins, aperture limits,
+absorber space, corrector/BPM locations, DA estimate > 1 mm."""
+
+
+def mba_reviewer_prompt(stage_name = None):
+    """Stage-scoped reviewer for MBA construction."""
+    s = f" (Stage: {stage_name})" if stage_name else ""
+    return f"""You are the CodeReviewer for MBA stage{s}.
+Decide: STAGE_COMPLETE (output OK + STAGE_CHECK_PASSED),
+NEEDS_FIX (structured repair block), or STAGE_FAILED.
+Stage checks:
+- design_contract: ranked goals listed
+- hoa_phase_selection: Nx/Ny integers, resonance-free
+- unit_cell_optimization: |trace|<2, |D_exit|<0.01, phase matches HOA target
+- sextupole_placement: leverage computed, k2 in 5-800 range
+- dsc_construction: eta_x~0, eta_x'~0 at straight
+- ring_assembly_linear: stable, Robinson sum ~4.0
+- nonlinear_check: DA > 1mm
 """

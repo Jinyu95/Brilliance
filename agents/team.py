@@ -32,6 +32,8 @@ from .prompts import (
     codewriter_prompt,
     exploration_codewriter_prompt,
     reviewer_prompt,
+    mba_stage_prompt,
+    mba_reviewer_prompt,
 )
 
 def selector_prompt() -> str:
@@ -254,6 +256,122 @@ async def run_design_stream(
                 on_message(source, content, msg_type)
 
         return last_result
+
+
+# ── MBA multi-stage workflow ────────────────────────────────────────────
+
+async def run_mba_design(
+    task: str,
+    *,
+    use_docker: bool = False,
+    max_messages_per_stage: int = 28,
+) -> dict[str, Any]:
+    """Run the full MBA construction methodology (10 sequential stages).
+
+    Each stage uses the existing 4-agent pipeline, but scoped to one
+    construction step. Accumulated state flows from stage to stage.
+
+    Returns the final accumulated state dict.
+    """
+    from .mba_workflow import MBAWorkflowRunner
+
+    runner = MBAWorkflowRunner()
+
+    for stage in runner.stages:
+        # Check required inputs
+        missing = runner.check_required_inputs(stage)
+        if missing:
+            runner.log_stage(stage, False, {},
+                             f"SKIPPED — missing inputs: {missing}")
+            continue
+
+        # Build prompt
+        prompt = runner.build_stage_prompt(stage, task)
+
+        # Run the 4-agent pipeline for this stage
+        max_fixes = stage.max_fix_attempts + 1  # +1 for the initial attempt
+        success = False
+
+        for attempt in range(max_fixes):
+            # Use stage-specific prompts
+            _cw_prompt = mba_stage_prompt(stage.name)
+            _rv_prompt = mba_reviewer_prompt(stage.name)
+
+            selector_model_client = create_model_client(role="selector")
+            executor = create_code_executor(use_docker)
+
+            async with executor:
+                planner = AssistantAgent(
+                    name=f"{PLANNER}_{stage.name}",
+                    description=f"Plans the '{stage.name}' MBA construction step.",
+                    model_client=create_model_client(role="planner"),
+                    system_message=_cw_prompt,
+                    tools=PLANNER_TOOLS,
+                    reflect_on_tool_use=True,
+                )
+                codewriter = AssistantAgent(
+                    name=f"{CODEWRITER}_{stage.name}",
+                    description=f"Implements the '{stage.name}' MBA construction step.",
+                    model_client=create_model_client(role="codewriter"),
+                    system_message=_cw_prompt,
+                )
+                code_runner = CodeExecutorAgent(
+                    name=f"{RUNNER}_{stage.name}",
+                    description="Executes Python code for MBA stage.",
+                    code_executor=executor,
+                )
+                reviewer = AssistantAgent(
+                    name=f"{REVIEWER}_{stage.name}",
+                    description=f"Reviews the '{stage.name}' MBA stage output.",
+                    model_client=create_model_client(role="reviewer"),
+                    system_message=_rv_prompt,
+                )
+
+                termination = (
+                    TextMentionTermination("STAGE_COMPLETE")
+                    | TextMentionTermination("STAGE_FAILED")
+                    | MaxMessageTermination(max_messages_per_stage)
+                )
+
+                from autogen_agentchat.teams import SelectorGroupChat
+
+                team = SelectorGroupChat(
+                    participants=[planner, codewriter, code_runner, reviewer],
+                    model_client=selector_model_client,
+                    termination_condition=termination,
+                    selector_prompt=(
+                        "Route: TaskPlanner -> CodeWriter -> CodeRunner -> CodeReviewer. "
+                        "If NEEDS_FIX, route back to CodeWriter (max {max_fixes} attempts)."
+                    ),
+                    selector_func=_route,
+                )
+
+                result = await Console(team.run_stream(task=prompt))
+
+            # Extract output from result
+            response_text = ""
+            if result and hasattr(result, "messages"):
+                for msg in result.messages:
+                    if hasattr(msg, "content") and isinstance(msg.content, str):
+                        response_text += msg.content + "\n"
+
+            if "STAGE_COMPLETE" in response_text:
+                output = runner.extract_output_from_response(response_text)
+                runner.accumulate(stage, output)
+                runner.log_stage(stage, True, output, "STAGE_COMPLETE")
+                success = True
+                break
+            elif "STAGE_FAILED" in response_text:
+                runner.log_stage(stage, False, {}, "STAGE_FAILED")
+                break
+            # Otherwise retry (NEEDS_FIX or timeout)
+        if not success:
+            runner.log_stage(stage, False, {}, "Exhausted fix attempts")
+            break  # stop the workflow; don't propagate garbage
+
+    report = runner.build_final_report()
+    print(report)
+    return runner.accumulated_state
 
 
 # ── Step-by-step single-agent calls (for user-in-the-loop UI) ────
