@@ -29,6 +29,13 @@ def _role_env_key(role: str) -> str:
     return normalized or "DEFAULT"
 
 
+# Reasoning models that emit their output in the thinking trace and produce
+# empty/stub final content.  These must NEVER be used for the CodeWriter role
+# because code blocks hidden in the thinking trace are invisible to CodeRunner.
+_REASONING_MODELS = {"deepseek-reasoner", "o1", "o1-mini", "o1-pro",
+                     "o3", "o3-mini", "deepseek-r1"}
+
+
 def _resolve_model_name(role: str | None = None, model: str | None = None) -> str:
     if model:
         return model
@@ -40,7 +47,31 @@ def _resolve_model_name(role: str | None = None, model: str | None = None) -> st
             if value:
                 return value
 
-    return os.environ.get("LLM_MODEL", "deepseek-chat")
+    base = os.environ.get("LLM_MODEL", "deepseek-chat")
+
+    # ── automatic reasoning-model fallback for CodeWriter ──────────
+    # Reasoning models hide code in the thinking trace → CodeRunner sees
+    # no code blocks.  Fall back to a coding model for that role only.
+    _REASONING_FALLBACKS = {
+        "deepseek-reasoner": "deepseek-chat",   # same API, non-reasoning
+        "deepseek-r1":       "deepseek-chat",
+        "o1":                "gpt-4o",
+        "o1-mini":           "gpt-4o",
+        "o1-pro":            "gpt-4o",
+        "o3":                "gpt-4o",
+        "o3-mini":           "gpt-4o",
+    }
+    if role == "codewriter" and base.lower() in _REASONING_MODELS:
+        fallback = _REASONING_FALLBACKS.get(base.lower(), "deepseek-chat")
+        import warnings as _w
+        _w.warn(
+            f"Reasoning model '{base}' cannot produce visible code. "
+            f"Switching CodeWriter to '{fallback}'. "
+            f"Set LLM_MODEL_CODEWRITER=<model> to override."
+        )
+        return fallback
+
+    return base
 
 
 def create_model_client(

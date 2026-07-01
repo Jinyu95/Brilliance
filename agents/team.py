@@ -38,8 +38,28 @@ from .prompts import (
 
 def selector_prompt() -> str:
     return (
-        "You are managing a JuTrack simulation pipeline. "
-        "Route messages in order: TaskPlanner → CodeWriter → CodeRunner → CodeReviewer."
+        "You are the speaker selector for a JuTrack lattice design team.\n\n"
+        "Available agents (pick ONE next speaker):\n"
+        "- TaskPlanner: parses user/AI requests into a structured TASK SPEC.\n"
+        "  Has tools: check_design_feasibility, estimate_natural_emittance,\n"
+        "  compare_lattice_families, get_reference_design, validate_task_spec.\n"
+        "- CodeWriter: writes runnable pyJuTrack Python scripts from the TASK SPEC.\n"
+        "- CodeRunner: executes the Python code and returns stdout/stderr.\n"
+        "- CodeReviewer: inspects CodeRunner output, emits TASK_COMPLETE\n"
+        "  (success) or NEEDS_FIX (retry with fix instructions) or TASK_FAILED.\n\n"
+        "Decision logic (approximate — use your judgment):\n"
+        "  First message MUST go to TaskPlanner.\n"
+        "  TaskPlanner → CodeWriter (write code from the TASK SPEC).\n"
+        "  If TaskPlanner says INFEASIBLE → CodeReviewer (validate diagnosis).\n"
+        "  CodeWriter → CodeRunner (execute the code).\n"
+        "  CodeRunner → CodeReviewer (review the output).\n"
+        "  CodeReviewer NEEDS_FIX → CodeWriter (fix, max 3 loops then terminate).\n"
+        "  CodeReviewer TASK_COMPLETE/TASK_FAILED → terminate (return None).\n"
+        "  CRITICAL: if CodeWriter produced empty output or no code block,\n"
+        "  send them back: 'No code found — please write a Python script.'\n"
+        "  If CodeRunner reports 'No code blocks found', route BACK to CodeWriter.\n\n"
+        "You MUST respond with EXACTLY ONE agent name: TaskPlanner, CodeWriter,\n"
+        "CodeRunner, or CodeReviewer.  Do not add any other text."
     )
 from .tools import PLANNER_TOOLS
 
@@ -52,68 +72,10 @@ REVIEWER  = "CodeReviewer"
 # Legacy aliases
 ANALYST   = PLANNER
 ARCHITECT = PLANNER
-# Kept as string constants so import sites don't break,
-# but these agents are no longer registered or used.
 REQUIREMENTS = "RequirementsEngineer"
 PHYSICIST = "AcceleratorPhysicist"
 DESIGN_CRITIC = "DesignCritic"
 RESEARCH_MANAGER = "ResearchLead"
-
-
-def _route(messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str | None:
-    """Deterministic speaker routing.
-
-    Returns agent name or None to terminate.
-    """
-    if not messages:
-        return PLANNER
-
-    last: TextMessage | None = None
-    for msg in reversed(messages):
-        if isinstance(msg, TextMessage):
-            last = msg
-            break
-
-    if last is None:
-        return PLANNER
-
-    source = last.source
-    content = last.content
-
-    if source == "user":
-        return PLANNER
-
-    if source == PLANNER:
-        # If the Planner declares infeasibility, skip CodeWriter and go directly
-        # to Reviewer so it can validate the diagnosis and emit TASK_COMPLETE.
-        if "INFEASIBLE" in content and "feasibility_status" in content:
-            return REVIEWER
-        return CODEWRITER
-
-    if source == CODEWRITER:
-        return RUNNER
-
-    if source == RUNNER:
-        return REVIEWER
-
-    if source == REVIEWER:
-        if "NEEDS_FIX" in content:
-            # Raise fix-attempt cap: 3 for ring designs, 5 for matching tasks.
-            # Default cap is 3 (was 2).
-            _max_fixes = 3
-            fix_count = sum(
-                1 for m in messages
-                if isinstance(m, TextMessage)
-                and m.source == REVIEWER
-                and "NEEDS_FIX" in m.content
-            )
-            if fix_count >= _max_fixes:
-                return None
-            return CODEWRITER
-        # TASK_COMPLETE, TASK_FAILED, or unknown → terminate
-        return None
-
-    return None
 
 
 async def run_design(
@@ -180,7 +142,6 @@ async def run_design(
             model_client=selector_model_client,
             termination_condition=termination,
             selector_prompt=selector_prompt(),
-            selector_func=_route,
         )
 
         return await Console(team.run_stream(task=task))
@@ -237,7 +198,6 @@ async def run_design_stream(
             model_client=selector_model_client,
             termination_condition=termination,
             selector_prompt=selector_prompt(),
-            selector_func=_route,
         )
 
         last_result = None
@@ -343,7 +303,6 @@ async def run_mba_design(
                         "Route: TaskPlanner -> CodeWriter -> CodeRunner -> CodeReviewer. "
                         "If NEEDS_FIX, route back to CodeWriter (max {max_fixes} attempts)."
                     ),
-                    selector_func=_route,
                 )
 
                 result = await Console(team.run_stream(task=prompt))
