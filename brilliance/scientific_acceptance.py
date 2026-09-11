@@ -45,49 +45,56 @@ def acceptance_instructions(required: Sequence[str], *, registry: Any = None) ->
 
 
 def _is_followup_request(text: str) -> bool:
-    """Recognize replies that amend or continue the current unfinished request.
+    """Recognize common replies/amendments, not arbitrary semantic topic links.
 
-    This is deliberately narrower than semantic topic classification.  The current
-    message must first fail to declare its own expert acceptance requirements; this
-    helper then preserves the previous scope for common option replies and concise
-    amendments such as ``b``, ``keep the ...`` or ``increase the ...``.
+    A pronoun anywhere in a question is insufficient: "What is this?" and
+    "Explain the previous result" are inspections, not new design campaigns.
+    Requirements are inherited only when a pending request exists in history.
     """
     rendered = str(text).strip()
     if not rendered:
         return False
+    choice = r"(?:[a-z]|[0-9]{1,2})"
     if re.fullmatch(
-        r"(?:please\s+)?(?:continue|resume|go\s+on|go\s+ahead|carry\s+on|keep\s+going|proceed|继续|继续吧|接着)\s*[.!。!！]?",
-        rendered,
-        re.IGNORECASE,
+        rf"(?:option\s+)?(?:{choice}|\({choice}\)|\[{choice}\])[.!。！]?",
+        rendered, re.IGNORECASE,
     ):
         return True
-    if re.fullmatch(r"(?:option\s*)?[\[(]?[a-z0-9]{1,2}[\])\].]?", rendered, re.IGNORECASE):
+    if re.fullmatch(
+        r"(?:yes|no|ok(?:ay)?|sure|do\s+that|use\s+that|try\s+that)[.!。！]?",
+        rendered, re.IGNORECASE,
+    ):
         return True
+    # An acknowledgement can prefix a real amendment; it must not turn
+    # "No, cancel this task" into permission to continue the pending campaign.
+    rendered = re.sub(r"^(?:yes|no|ok(?:ay)?|sure)\s*,\s*", "", rendered,
+                      flags=re.IGNORECASE)
     if re.match(
-        r"(?:please\s+)?(?:yes|no|ok(?:ay)?|sure|do\s+that|use\s+that|try\s+that|"
-        r"choose|select|keep|change|set|make|increase|decrease|raise|lower|reduce|"
-        r"relax|release|allow|preserve|retain|shorten|lengthen|expand|enlarge|"
-        r"tighten|loosen|continue|resume|proceed)\b",
-        rendered,
-        re.IGNORECASE,
+        r"^(?:please\s+)?(?:continue|resume|go\s+on|go\s+ahead|carry\s+on|"
+        r"keep\s+going|proceed)\b",
+        rendered, re.IGNORECASE,
     ):
         return True
-    return bool(re.search(
-        r"\b(?:this|that|it|same|current|previous|above|former|latter)\b",
-        rendered,
-        re.IGNORECASE,
+    if re.fullmatch(r"(?:继续|继续吧|接着)[.!。！]?", rendered):
+        return True
+    return bool(re.match(
+        r"^(?:please\s+)?(?:choose|select|keep|change|set|make|increase|decrease|"
+        r"raise|lower|reduce|relax|release|allow|preserve|retain|shorten|lengthen|"
+        r"expand|enlarge|tighten|loosen)\s+"
+        r"(?:the|this|that|these|those|it|its|both|same|current|previous|option)\b",
+        rendered, re.IGNORECASE,
     ))
 
 
 def continued_request_acceptance(
     request: str, history: Sequence[Mapping[str, Any]] = (), *, registry: Any = None,
 ) -> tuple[str, ...]:
-    """Resolve follow-up replies against the most recent unfinished scientist request.
+    """Carry evidence requirements across replies to a pending request.
 
-    A message that directly declares expert acceptance requirements always owns its
-    scope.  Short option replies and obvious amendments inherit the nearest pending
-    request instead of silently dropping its evidence contract.  A substantive
-    unrelated user request or an explicit saved completion ends that inheritance.
+    Explicit expert requests own their scope. Common option replies and parameter
+    amendments inherit through other such replies until a saved completion or a
+    substantive new request. No history is edited. This bounded-history fallback
+    is not a general intent classifier or a persistent multi-task request store.
     """
     direct = request_acceptance_requirements(request, registry=registry)
     if direct:
@@ -110,9 +117,8 @@ def continued_request_acceptance(
             required = request_acceptance_requirements(content, registry=registry)
             if required:
                 return required
-            if _is_followup_request(content):
-                continue
-            return ()
+            if not _is_followup_request(content):
+                return ()
     return ()
 
 
