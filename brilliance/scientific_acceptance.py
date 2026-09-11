@@ -44,23 +44,56 @@ def acceptance_instructions(required: Sequence[str], *, registry: Any = None) ->
     return "\n\n".join(sections)
 
 
+def _is_followup_request(text: str) -> bool:
+    """Recognize replies that amend or continue the current unfinished request.
+
+    This is deliberately narrower than semantic topic classification.  The current
+    message must first fail to declare its own expert acceptance requirements; this
+    helper then preserves the previous scope for common option replies and concise
+    amendments such as ``b``, ``keep the ...`` or ``increase the ...``.
+    """
+    rendered = str(text).strip()
+    if not rendered:
+        return False
+    if re.fullmatch(
+        r"(?:please\s+)?(?:continue|resume|go\s+on|go\s+ahead|carry\s+on|keep\s+going|proceed|继续|继续吧|接着)\s*[.!。!！]?",
+        rendered,
+        re.IGNORECASE,
+    ):
+        return True
+    if re.fullmatch(r"(?:option\s*)?[\[(]?[a-z0-9]{1,2}[\])\].]?", rendered, re.IGNORECASE):
+        return True
+    if re.match(
+        r"(?:please\s+)?(?:yes|no|ok(?:ay)?|sure|do\s+that|use\s+that|try\s+that|"
+        r"choose|select|keep|change|set|make|increase|decrease|raise|lower|reduce|"
+        r"relax|release|allow|preserve|retain|shorten|lengthen|expand|enlarge|"
+        r"tighten|loosen|continue|resume|proceed)\b",
+        rendered,
+        re.IGNORECASE,
+    ):
+        return True
+    return bool(re.search(
+        r"\b(?:this|that|it|same|current|previous|above|former|latter)\b",
+        rendered,
+        re.IGNORECASE,
+    ))
+
+
 def continued_request_acceptance(
     request: str, history: Sequence[Mapping[str, Any]] = (), *, registry: Any = None,
 ) -> tuple[str, ...]:
-    """Resolve bare continuations only against the pending scientist request.
+    """Resolve follow-up replies against the most recent unfinished scientist request.
 
-    A substantive new request replaces the old scope. An explicit saved request
-    completion ends that scope; a project title never supplies missing intent.
+    A message that directly declares expert acceptance requirements always owns its
+    scope.  Short option replies and obvious amendments inherit the nearest pending
+    request instead of silently dropping its evidence contract.  A substantive
+    unrelated user request or an explicit saved completion ends that inheritance.
     """
-
-    def is_continuation(text: str) -> bool:
-        return bool(re.fullmatch(
-            r"\s*(?:please\s+)?(?:continue|resume|go\s+on|go\s+ahead|carry\s+on|keep\s+going|proceed|继续|继续吧|接着)\s*[.!。!！]?\s*",
-            text, re.IGNORECASE,
-        ))
-
-    if not is_continuation(request):
-        return request_acceptance_requirements(request, registry=registry)
+    direct = request_acceptance_requirements(request, registry=registry)
+    if direct:
+        return direct
+    if not _is_followup_request(request):
+        return ()
     for row in reversed(history):
         if row.get("role") == "assistant":
             meta = row.get("meta", {})
@@ -72,8 +105,14 @@ def continued_request_acceptance(
                 return ()
         if row.get("role") == "user":
             content = str(row.get("content", ""))
-            if content.strip() and not is_continuation(content):
-                return request_acceptance_requirements(content, registry=registry)
+            if not content.strip():
+                continue
+            required = request_acceptance_requirements(content, registry=registry)
+            if required:
+                return required
+            if _is_followup_request(content):
+                continue
+            return ()
     return ()
 
 
