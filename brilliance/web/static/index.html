@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f7f5">
+  <title>BRILLIANCE · JuTrack research</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2320201e'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='40' font-family='serif' fill='white'%3EB%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/workbench.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <aside id="sidebar" class="sidebar">
+      <div class="brand-row">
+        <div class="brand-mark">B</div>
+        <div><strong>BRILLIANCE</strong><small>JuTrack research</small></div>
+        <button id="close-sidebar" class="icon-button mobile-only" aria-label="Close sidebar">×</button>
+      </div>
+      <button id="new-chat" class="new-chat"><span>＋</span> New research</button>
+      <div class="history-label">Research history</div>
+      <nav id="project-list" class="project-list" aria-label="Research history"></nav>
+      <div class="sidebar-foot">
+        <span id="connection-dot" class="connection-dot"></span>
+        <span id="connection-label">Connecting…</span>
+      </div>
+    </aside>
+
+    <main class="main-panel">
+      <header class="topbar">
+        <button id="open-sidebar" class="icon-button" aria-label="Open sidebar">☰</button>
+        <div class="project-heading">
+          <div id="project-title">New accelerator research</div>
+          <div id="project-progress" class="project-progress"></div>
+        </div>
+        <div id="status-pill" class="status-pill hidden"></div>
+        <button id="pause-agent" class="text-button hidden" type="button">Pause agent</button>
+        <button id="workspace-toggle" class="text-button" type="button" aria-expanded="false">Workspace</button>
+      </header>
+
+      <section id="welcome" class="welcome">
+        <div class="hero-mark">B</div>
+        <h1>Your accelerator research workspace</h1>
+        <p>Ask a physics question. Develop and run code with JuTrack, inspect the evidence, and change direction together. You can send a message at any time.</p>
+        <div class="examples">
+          <button class="example" data-prompt="Design a 3 GeV, 32-cell MBA ring. Start with the physical requirements and show the first computed candidate.">Explore an MBA design</button>
+          <button class="example" data-prompt="What JuTrack calculations and local expert knowledge are available for this research session?">Explore available capabilities</button>
+          <button class="example" data-prompt="Help me plan a particle-tracking study. Discuss which initial conditions and observables we should use.">Plan a tracking study</button>
+        </div>
+      </section>
+
+      <section id="conversation" class="conversation hidden" aria-live="polite"></section>
+
+      <div class="composer-dock">
+        <form id="composer" class="composer">
+          <textarea id="prompt" rows="1" maxlength="20000" placeholder="Message BRILLIANCE…" aria-label="Research message"></textarea>
+          <div class="composer-actions">
+            <button id="context-toggle" type="button" class="text-button">Add context</button>
+            <span id="composer-hint" class="composer-hint">Enter to send · Shift+Enter for newline</span>
+            <button id="send" type="submit" class="send-button" aria-label="Send message">↑</button>
+          </div>
+          <textarea id="context" class="context-field hidden" rows="3" maxlength="100000" placeholder="Optional machine assumptions, local file paths, prior lattice information, or constraints…"></textarea>
+        </form>
+        <p class="disclaimer">Numerical claims come from JuTrack services and deterministic evidence gates. Review accepted assumptions before publication.</p>
+      </div>
+    </main>
+    <aside id="workspace-panel" class="workspace-panel hidden" aria-label="Research workspace">
+      <header><strong>Workspace</strong><button id="workspace-close" class="icon-button" aria-label="Close workspace">×</button></header>
+      <p class="workspace-note">Saved programs are the actual research source. Edits are saved as new drafts; running code is never overwritten.</p>
+      <nav class="workspace-tabs"><button id="show-programs" class="text-button">Programs</button><button id="show-activity" class="text-button">Tool activity</button></nav>
+      <div id="program-list" class="program-list"></div>
+      <div id="activity-log" class="activity-log hidden"></div>
+      <section id="program-editor" class="hidden">
+        <label for="program-name">New draft filename</label>
+        <input id="program-name" autocomplete="off" placeholder="experiment_draft.py">
+        <textarea id="program-source" spellcheck="false" aria-label="Research program source"></textarea>
+        <button id="save-program" class="new-chat">Save new draft</button>
+        <p id="program-status" role="status"></p>
+      </section>
+    </aside>
+  </div>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

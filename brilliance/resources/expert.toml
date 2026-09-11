@@ -1,0 +1,86 @@
+schema_version = "1.0"
+id = "brilliance.accelerator_core"
+version = "1.0.0"
+title = "Brilliance accelerator-physics core"
+description = "Small general execution kernel, JuTrack authority rules, and accelerator-physics knowledge retrieval."
+status = "reviewed"
+domains = ["accelerator physics", "beam dynamics", "lattice design", "storage rings", "jutrack"]
+authors = ["Brilliance maintainers"]
+enabled = true
+
+[[knowledge]]
+id = "accelerator.research_handbook"
+title = "Accelerator research handbook"
+path = "accelerator_research_handbook.md"
+kind = "foundation"
+status = "draft"
+summary = "General JuTrack use, saved-program execution, evidence boundaries, and knowledge-guided open-ended research."
+tags = ["jutrack", "lattice", "optics", "tracking", "radiation", "optimization", "7ba", "mba"]
+priority = 75
+
+[[tools]]
+id = "accelerator.run_research_program"
+title = "Run a saved research program"
+description = "Run a short model-authored Python program from the project workspace with immutable inputs and archived typed outputs."
+entrypoint = "brilliance.expert_builtin:execute_research_program"
+validator_entrypoint = "brilliance.expert_builtin:validate_saved_research_program"
+authority = "provisional"
+output = "The exact program, arguments, stdout, result, tables, plots, and optional candidate lattice."
+requires_lattice = false
+timeout_s = 600
+
+[tools.parameters]
+type = "object"
+required = ["script"]
+additionalProperties = false
+
+[tools.parameters.properties.script]
+type = "string"
+
+[tools.parameters.properties.arguments]
+type = "object"
+default = {}
+
+[tools.parameters.properties.timeout_s]
+type = "integer"
+minimum = 1
+maximum = 600
+default = 600
+
+[tools.parameters.properties.require_optimizer_evidence]
+type = "boolean"
+default = false
+
+[[tools]]
+id = "accelerator.run_long_research_program"
+title = "Run a durable research program"
+description = "Run a long model-authored Python program in a managed worker that survives the model turn and supports progress and explicit cancellation. Its timeout_s is a reporting estimate, not permission to terminate an ongoing scientific calculation."
+entrypoint = "brilliance.expert_builtin:execute_long_research_program"
+validator_entrypoint = "brilliance.expert_builtin:validate_saved_research_program"
+authority = "provisional"
+output = "The exact durable program, arguments, progress, stdout, result, tables, plots, and optional candidate lattice."
+requires_lattice = false
+timeout_s = 604800
+
+[tools.parameters]
+type = "object"
+required = ["script"]
+additionalProperties = false
+
+[tools.parameters.properties.script]
+type = "string"
+
+[tools.parameters.properties.arguments]
+type = "object"
+default = {}
+
+[tools.parameters.properties.timeout_s]
+type = "integer"
+minimum = 1
+maximum = 604800
+default = 604800
+description = "Report when this runtime estimate is exceeded while keeping the durable calculation alive until completion or explicit user cancellation."
+
+[tools.parameters.properties.require_optimizer_evidence]
+type = "boolean"
+default = false

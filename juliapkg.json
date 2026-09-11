@@ -3,7 +3,8 @@
     "packages": {
         "JuTrack": {
             "uuid": "a43d9089-7dde-42d4-b2b6-ab2f8db67ed6",
-            "path": "JuTrack.jl"
+            "path": "JuTrack.jl",
+            "dev": true
         }
     }
 }

@@ -1,0 +1,80 @@
+schema_version = "1.0"
+
+[python]
+# Paths are resolved from the BRILLIANCE source root. The explicit virtual
+# environment path prevents agent commands from resolving to an unrelated
+# Conda or system interpreter. There is deliberately no "current Python"
+# fallback: a missing configured executable is a platform error, not a choice
+# for the research agent to make.
+windows = ".venv/Scripts/python.exe"
+posix = ".venv/bin/python"
+
+[jutrack]
+root = "JuTrack.jl"
+python_module = "JuTrack.jl/python_integration/pyJuTrack.py"
+python_import = "pyJuTrack"
+julia_project = "JuTrack.jl"
+python_julia_environment = ".venv/julia_env"
+julia_depot = "~/.julia"
+# `auto` reads the exact Julia executable and libjulia selected by JuliaCall
+# from .venv/julia_env/pyjuliapkg/meta.json. Never copy machine-specific paths
+# into this shared configuration file.
+julia_executable = "auto"
+libjulia = "auto"
+# Brilliance creates per-project junctions here before the Codex sandbox starts.
+# Julia then sees configured paths that support its Windows long-path probes;
+# the research agent must never repair or rediscover the runtime itself.
+sandbox_alias_root = "~/.julia/brilliance_runtime"
+minimum_julia = "1.10"
+
+[paths]
+project_store = "research_projects"
+handbook = "brilliance/resources/accelerator_research_handbook.md"
+accelerator_api = "brilliance/accelerator_api.py"
+
+[execution]
+julia_packages_offline = true
+allow_runtime_dependency_updates = false
+candidate_wall_time_s = 3600
+# This controls research-tool network access, not the configured LLM provider.
+# false disables Codex web search, apps/connectors/plugins, browser tools, and
+# shell-command networking. It does not disable local stdio MCP. Change it to
+# true only for an explicitly online study.
+internet_access = false
+
+# workspace-write permits JuTrack to read its installation while limiting writes
+# to the project and configured Julia depot. It is required for hard network denial.
+codex_sandbox = "workspace-write"
+
+[compute]
+# Population members are independent within a generation. Process isolation is
+# required because each worker mutates its own JuTrack lattice. Keep Julia and
+# BLAS at one thread per worker to avoid CPU oversubscription.
+backend = "local_process"
+local_worker_processes = 8
+threads_per_worker = 1
+
+[mcp]
+# MCP is not synonymous with internet access. Preinstalled command-launched
+# stdio servers remain available in offline research mode. URL-based MCP servers
+# are a separate outbound-network capability and stay off for the current study.
+local_stdio_enabled = true
+remote_http_enabled = false
+
+[experts]
+# Add EXPERT.md knowledge modules under these roots. Optional typed tools.py files
+# may expose small reusable primitives. Project-local modules under
+# workspace/experts are also read.
+paths = ["expert_modules"]
+strict = true
+project_modules_enabled = true
+max_context_chars = 80000
+
+[interaction]
+# Pause after one meaningful scientific milestone so the scientist can inspect
+# results and change the next calculation. User messages sent during a turn steer
+# the live Codex turn instead of waiting for another generic "continue" cycle.
+auto_continue = false
+max_autonomous_increments = 1
+turn_wall_time_s = 3600
+require_scientist_checkpoint = true

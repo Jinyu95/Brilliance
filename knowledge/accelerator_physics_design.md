@@ -86,13 +86,6 @@ Facilities using HMBA concepts:
 
 ## Techniques for Reducing Emittance
 
-### Combined-Function Dipoles
-
-Adding a quadrupole gradient to a bending dipole (combined-function dipole)
-provides extra focusing that shifts the optimal β and η at the dipole and
-allows achieving lower emittance with fewer independent quadrupoles. However,
-the gradient must be carefully balanced to avoid exciting chromaticity.
-
 ### Longitudinal Gradient Bends (LGB)
 
 A longitudinal gradient bend has its bending field vary along its length —
@@ -121,13 +114,13 @@ Damping wigglers in long straight sections increase the synchrotron radiation
 energy loss, enhancing radiation damping and further reducing the equilibrium
 emittance. Effective when the ring has enough straight-section length.
 
-### Adjusting the Damping Partition Number J_x
+### Radiation damping-partition validity
 
-Robinson's theorem constrains J_x + J_y + J_z = 4 (for an isomagnetic ring
-without RF). By shifting the damping partition (e.g., via off-center orbit in
-combined-function dipoles or via gradient dipoles), one can increase J_x
-beyond 1, thereby lowering horizontal emittance at the expense of longitudinal
-damping.
+Robinson's theorem constrains the sum of the damping partitions. Every proposed
+electron-storage-ring result must have finite radiation integrals, positive
+horizontal, vertical, and longitudinal damping partitions, and positive natural
+emittance. A negative emittance indicates an invalid anti-damped solution, not
+a low-emittance design.
 
 
 ## Nonlinear Dynamics and Dynamic Aperture

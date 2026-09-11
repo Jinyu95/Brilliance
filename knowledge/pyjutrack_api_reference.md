@@ -71,15 +71,14 @@ o = jt.KOCT(name, length, k3)
 ```python
 b = jt.SBEND(name, length, angle)
 # b.name, b.len, b.angle, b.e1, b.e2
-# Optional: e1=0, e2=0, PolynomA, PolynomB (multipole components),
-#   MaxOrder (auto-set from PolynomB), NumIntSteps=10, rad=0,
+# Optional: e1=0, e2=0, NumIntSteps=10, rad=0,
 #   fint1=0, fint2=0, gap=0, FringeBendEntrance=1, FringeBendExit=1,
 #   FringeQuadEntrance, FringeQuadExit, T1, T2, R1, R2,
 #   RApertures, EApertures, KickAngle
 ```
 IMPORTANT: `angle` is the bending angle in RADIANS.
-For combined-function dipoles, add quadrupole gradient via
-`PolynomB=[0, k1, 0, 0]` (index 0=dipole kick, 1=quad, 2=sext, 3=oct).
+For the current MBA workflow, bends carry no harmonic fields. Use standalone
+`KQUAD`, `KSEXT`, and `KOCT` elements for focusing and nonlinear correction.
 
 ### RBEND (Rectangular Bend)
 ```python
@@ -92,7 +91,7 @@ entrance and exit faces perpendicular to the design orbit.
 ### ESBEND (Exact Sector Bend)
 ```python
 b = jt.ESBEND(name, length, angle)
-# Extra field: .gK (geometric K). Optional: gK=0, PolynomB, etc.
+# Extra field: .gK (geometric K).
 ```
 Uses exact curved-geometry Hamiltonian. More accurate for large bend angles.
 

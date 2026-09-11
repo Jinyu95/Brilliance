@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "brilliance"
-version = "0.1.0"
-description = "AI agent for accelerator lattice design using pyJuTrack"
+version = "0.7.0"
+description = "Evidence-gated accelerator-physics research with JuTrack as the primary engine"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -25,30 +25,54 @@ dependencies = [
     # Julia bridge — installs Julia automatically via juliacall if not found
     "juliacall>=0.9.20",
     "juliapkg>=0.1.10",
-    # pyJuTrack from the bundled source (installed via setup_env.py / Dockerfile)
+    # pyJuTrack from the bundled source (installed via setup_env.py)
     # Listed here for documentation; the actual install targets JuTrack.jl/python_integration/
     "numpy>=1.24",
-    # AutoGen multi-agent framework
-    "autogen-agentchat>=0.4",
-    "autogen-ext[openai]>=0.4",
-    # App
-    "streamlit>=1.34",
+    # Supported scientific toolbox available to every model-authored program.
+    "scipy>=1.11",
+    "pandas>=2.0",
+    "sympy>=1.12",
+    "h5py>=3.10",
+    "joblib>=1.3",
+    # Trusted headless scientific plotting for agent-authored figures and pyJuTrack.
+    "matplotlib>=3.8",
+    # Mature conversational agent runtime; reuses an existing Codex login.
+    "openai-codex==0.147.0",
+    # Chat-native application
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
     "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "httpx>=0.27",
     "black",
     "ruff",
 ]
 
 [project.scripts]
-brilliance = "app:main"
+brilliance = "brilliance.launcher:main"
+brilliance-gui = "brilliance.launcher:main"
+brilliance-tool = "brilliance.codex_tools:main"
+brilliance-expert = "brilliance.expert_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agents*", "scripts*", "benchmarks*", "templates*", "knowledge*"]
+include = ["brilliance*"]
 
 [tool.setuptools.package-data]
-"*" = ["*.json", "*.md", "*.jl", "*.py", "*.toml", "*.enc"]
+"*" = ["*.json", "*.md", "*.jl", "*.py", "*.toml", "*.yml", "*.enc", "*.html", "*.css", "*.js"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["JuTrack.jl", ".venv", "workspace", "research_runs*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = ["JuTrack.jl", "research_projects", "research_runs*", "workspace"]
+
+[tool.ruff.lint]
+select = ["E4", "E9", "F", "I"]
