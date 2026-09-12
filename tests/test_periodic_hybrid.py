@@ -185,7 +185,7 @@ def test_cancellation_keeps_last_accepted_state():
 def test_evaluation_budget_is_bounded():
     result = run(settings=HybridContinuationSettings(max_attempts=2, max_evaluations_per_attempt=2))
     assert all(r["evaluations"] <= 2 for r in result["records"])
-    assert result["status"] == "attempt_budget_exhausted"
+    assert result["status"] == "evaluation_budget_exhausted"
 
 
 @pytest.mark.parametrize("setting", [dict(initial_step=0), dict(minimum_step=.2),

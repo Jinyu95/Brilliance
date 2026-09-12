@@ -528,10 +528,16 @@ class ResearchRun:
         if normalized_status not in {"completed", "infeasible", "partial"}:
             raise ValueError("status must be completed, infeasible, or partial")
         result_data = dict(data or {})
+        from .numerical_evidence import collect_numerical_evidence
+        numerical = collect_numerical_evidence(self.output_directory)
+        if numerical["runs"]:
+            # Runtime-owned, independent of model-written summaries and jsafe().
+            result_data["numerical_evidence"] = numerical["runs"]
         optimizer_required = str(
             os.environ.get("BRILLIANCE_REQUIRE_OPTIMIZER_EVIDENCE", "")
         ).strip().lower() in {"1", "true", "yes", "on"}
-        optimizer_started = (self.output_directory / "optimizer_evidence.json").is_file()
+        optimizer_started = ((self.output_directory / "optimizer_evidence.json").is_file()
+                             or numerical["optimization_started"])
         declared_blocker = str(result_data.get("optimization_blocker", "")).strip()
         if optimizer_required and not optimizer_started and not (
             normalized_status == "infeasible" and declared_blocker
@@ -550,6 +556,9 @@ class ResearchRun:
             if any(not isinstance(item, Mapping) for item in table_rows):
                 raise ValueError("every result table row must be a mapping of column names")
             rendered_tables.append(row)
+        if numerical["rows"]:
+            rendered_tables.insert(0, {"title": "Runtime numerical outcomes (independent of program summary)",
+                                       "rows": numerical["rows"]})
         rendered_plots: list[dict[str, Any]] = []
         for item in plots:
             row = {"path": str(item)} if isinstance(item, (str, Path)) else dict(item)
@@ -574,9 +583,18 @@ class ResearchRun:
                 raise ValueError(f"download does not exist: {path}")
             row["path"] = relative.as_posix()
             rendered_downloads.append(row)
+        supplied_download_paths = {item["path"] for item in rendered_downloads}
+        rendered_downloads.extend(item for item in numerical["downloads"]
+                                  if item["path"] not in supplied_download_paths)
         lattice_value = None
         candidate = None
         result_limitations = [str(item) for item in limitations]
+        if any(item["has_accepted_progress"] for item in numerical["runs"]):
+            result_limitations.append(
+                "Runtime numerical evidence retains verified intermediate candidates independently "
+                "of the program's submitted candidate and summary; see the numerical outcome table "
+                "and exact candidate downloads. None is an automatic working-lattice selection."
+            )
         if candidate_lattice is not None:
             from .lattice import LatticeIR
             from .lattice_diagnostics import declared_mirror_diagnostics

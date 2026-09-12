@@ -181,6 +181,45 @@ def _reproduces(first, second, settings):
     return bool(np.allclose(a, b, rtol=settings.replay_rtol, atol=settings.replay_atol))
 
 
+def _check_target_direction(parent, contract, settings):
+    """Reject actual direction changes, not roundoff between mirror partners."""
+    violations = []
+    def check(name, requested, measured, increasing):
+        tolerance = settings.replay_atol + settings.replay_rtol * max(abs(requested), abs(measured))
+        wrong = measured - requested if increasing else requested - measured
+        if wrong > tolerance:
+            direction = "at least" if increasing else "no greater than"
+            violations.append(
+                f"{name}: requested={requested:.17g} m must be {direction} "
+                f"parent={measured:.17g} m (direction tolerance={tolerance:.3g} m)"
+            )
+    for name in SLOT_NAMES:
+        check(name, contract.slot_dispersion_goals_m[name], parent["slots"][name]["min_dx_m"], True)
+    check("core_dispersion", contract.core_dispersion_goal_m, parent["core_dispersion_m"], False)
+    if violations:
+        raise ValueError("Hybrid target direction is invalid: " + "; ".join(violations))
+
+
+def hybrid_continuation_summary(state):
+    """Canonical compact facts; campaign termination is not candidate acceptance."""
+    records = state.get("records", [])
+    measurement = state.get("measurement", {})
+    return {
+        "status": state["status"],
+        "fraction": state["fraction"],
+        "requested_fraction": state.get("requested_fraction"),
+        "has_accepted_progress": bool(state.get("accepted_steps")),
+        "accepted_step_count": len(state.get("accepted_steps", [])),
+        "attempt_count": len(records),
+        "evaluations": sum(r.get("evaluations", 0) for r in records),
+        "optimization_started": bool(records),
+        "last_solver_termination": records[-1].get("solver_termination") if records else None,
+        "emittance_pm": measurement.get("emittance_pm"),
+        "requires_independent_acceptance": True,
+        "request_satisfied": False,
+    }
+
+
 class _AttemptBudget(Exception):
     pass
 
@@ -203,8 +242,8 @@ def radiation_aware_hybrid_continuation(
     and sampler. Both receive physical strength coordinates, not normalized ones.
     Exceptions from physics APIs propagate. Solver termination is not acceptance.
 
-    Each failed attempt restarts from the last ACCEPTED position and halves the
-    target step. Checkpoints preserve that position and the immutable parent cap.
+    A completed unsuccessful solve restarts from the last ACCEPTED position and
+    halves the target step. Resource cutoffs stop with their own status instead. Checkpoints preserve that position and the immutable parent cap.
     No automatic resume or geometry release is hidden in this first implementation.
     A later campaign must explicitly retain the ORIGINAL radiation cap.
     """
@@ -229,19 +268,23 @@ def radiation_aware_hybrid_continuation(
     failed = _failed(hybrid_constraint_slacks(parent, parent, contract, 0.0), settings.feasibility_tolerance)
     if failed:
         raise ValueError(f"Parent violates declared machine limits: {failed}")
-    if any(contract.slot_dispersion_goals_m[name] < parent["slots"][name]["min_dx_m"]
-           for name in SLOT_NAMES) or contract.core_dispersion_goal_m > parent["core_dispersion_m"]:
-        raise ValueError("This route increases slot dispersion and does not raise the core dispersion goal")
+    # Identity-only evaluation does not impose a future deformation direction.
+    if end_fraction > 0:
+        _check_target_direction(parent, contract, settings)
     identity = {"schema": SCHEMA, "measurement_identity": measurement_identity,
                 "initial_position": x0.tolist(), "bounds": box.tolist(),
                 "contract": asdict(contract), "settings": asdict(settings)}
     identity_hash = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
     state = {"schema": SCHEMA, "contract_id": identity_hash, "contract": identity,
              "status": "running", "fraction": 0.0, "position": x0.tolist(),
+             "requested_fraction": end_fraction,
              "parent_measurement": parent, "measurement": parent, "records": [],
              "accepted_steps": [], "request_satisfied": False,
              "limitation": "A matched dispersion/radiation stage is not nonlinear H-MBA validation."}
     def save():
+        state["has_accepted_progress"] = bool(state["accepted_steps"])
+        state["accepted_step_count"] = len(state["accepted_steps"])
+        state["summary"] = hybrid_continuation_summary(state)
         if checkpoint:
             checkpoint(deepcopy(state))
     save()
@@ -258,6 +301,7 @@ def radiation_aware_hybrid_continuation(
         upper = np.minimum(1.0, z0 + settings.trust_fraction)
         cache, feasible = {}, []
         calls = 0
+        objective_calls = constraint_calls = major_iterations = 0
         def evaluate(z):
             nonlocal calls
             if cancelled and cancelled():
@@ -276,31 +320,59 @@ def radiation_aware_hybrid_continuation(
                     feasible.append((m["emittance_pm"], p.copy(), deepcopy(m)))
             return cache[key]
         def objective(z):
+            nonlocal objective_calls
+            objective_calls += 1
             _, m, s = evaluate(z)
             if m["valid"]:
                 return m["emittance_pm"] / parent["emittance_pm"]
             # Finite search penalty only; invalid points can NEVER be accepted.
             return contract.max_emittance_pm / parent["emittance_pm"] + 10 + sum(min(0., v)**2 for v in s.values())
+        def constraints(z):
+            nonlocal constraint_calls
+            constraint_calls += 1
+            return np.asarray(list(evaluate(z)[2].values()))
+        def iteration_completed(_position):
+            nonlocal major_iterations
+            major_iterations += 1
         termination = "not_started"
+        resource_cutoff = None
+        solution = None
         record = {"target_fraction": target, "from_fraction": state["fraction"],
-                  "start_position": state["position"][:], "step": target - state["fraction"]}
+                  "start_position": state["position"][:], "step": target - state["fraction"],
+                  "variable_count": len(x0), "evaluation_budget": settings.max_evaluations_per_attempt,
+                  "iteration_budget": settings.max_iterations,
+                  "forward_difference_stencil_size": len(x0) + 1}
         try:
             solution = minimize(objective, z0, method="SLSQP", bounds=list(zip(lower, upper)),
-                constraints={"type": "ineq", "fun": lambda z: np.asarray(list(evaluate(z)[2].values()))},
+                constraints={"type": "ineq", "fun": constraints}, callback=iteration_completed,
                 options={"maxiter": settings.max_iterations, "ftol": settings.optimizer_ftol,
                          "eps": settings.finite_difference_step})
-            evaluate(solution.x)
             termination = str(solution.message)
             record["solver_success"] = bool(solution.success)
+            record["solver_status"] = getattr(solution, "status", None)
+            record["solver_iterations"] = getattr(solution, "nit", major_iterations)
+            record["solver_objective_evaluations"] = getattr(solution, "nfev", None)
+            record["solver_gradient_evaluations"] = getattr(solution, "njev", None)
+            if getattr(solution, "status", None) == 9:
+                resource_cutoff = "iteration_budget_exhausted"
+            evaluate(solution.x)
         except _AttemptBudget:
             termination = "evaluation_budget_exhausted"
+            resource_cutoff = termination
         except _Cancelled:
             termination = "cancelled"
             state["status"] = "cancelled"
-        record.update(evaluations=calls, solver_termination=termination, accepted=False)
+        record.update(evaluations=calls, solver_termination=termination, accepted=False,
+                      resource_cutoff=resource_cutoff, major_iterations_completed=major_iterations,
+                      objective_calls=objective_calls, constraint_calls=constraint_calls)
+        record.setdefault("solver_success", False)
         if cache:
-            _, _, best_slacks = min(cache.values(), key=lambda v: sum(min(0., s)**2 for s in v[2].values()))
+            best_position, best_measurement, best_slacks = min(
+                cache.values(), key=lambda v: sum(min(0., s)**2 for s in v[2].values()))
             record["best_trial_failed_constraints"] = _failed(best_slacks, settings.feasibility_tolerance)
+            record["best_trial"] = {"position": best_position.tolist(),
+                                    "measurement": deepcopy(best_measurement),
+                                    "constraint_slacks": dict(best_slacks)}
         if feasible and state["status"] != "cancelled":
             _, candidate, measured = min(feasible, key=lambda v: v[0])
             replay = _checked_measurement(verify(candidate.copy()))
@@ -311,19 +383,30 @@ def radiation_aware_hybrid_continuation(
                 record["replay_failed_constraints"] = failures
             else:
                 state.update(position=candidate.tolist(), fraction=target, measurement=replay)
-                record.update(accepted=True, emittance_pm=replay["emittance_pm"])
+                record.update(accepted=True, emittance_pm=replay["emittance_pm"],
+                              accepted_position=candidate.tolist(),
+                              accepted_measurement=deepcopy(replay),
+                              accepted_constraint_slacks=hybrid_constraint_slacks(replay, parent, contract, target))
                 state["accepted_steps"].append({"fraction": target, "position": candidate.tolist(), "measurement": replay})
-                step = min(settings.maximum_step, step * 1.5)
+                # A resource-limited feasible point is progress, not convergence.
+                # Do not enlarge the next target on an unfinished local solve.
+                if resource_cutoff is None and bool(getattr(solution, "success", False)):
+                    step = min(settings.maximum_step, step * 1.5)
         state["records"].append(record)
-        if progress:
-            progress(deepcopy(record))
-        save()
-        if state["status"] == "cancelled":
-            break
-        if not record["accepted"]:
+        # A numerical resource cutoff is not evidence against the target. Stop
+        # and retain the accepted branch; never halve into a false topology stall.
+        if state["status"] != "cancelled" and resource_cutoff and not record["accepted"]:
+            state["status"] = resource_cutoff
+            record["next_action"] = "review_numerical_budget_without_changing_physical_contract"
+        elif state["status"] != "cancelled" and not record["accepted"]:
             step = (target - state["fraction"]) / 2
             if step < settings.minimum_step:
-                state["status"] = "continuation_stalled"; break
+                state["status"] = "continuation_stalled"
+        save()  # Raw evidence is durable before caller-owned display callbacks.
+        if progress:
+            progress(deepcopy(record))
+        if state["status"] != "running":
+            break
     if state["status"] == "running":
         state["status"] = ("identity_passed" if end_fraction == 0 else
                            "continuation_targets_met" if state["fraction"] >= end_fraction else
@@ -501,15 +584,52 @@ def match_periodic_hybrid(
                     minimum_slot_length_m=minimum_slot_length_m, sampling_step_m=max_sample_step_m,
                     limits=dict(limits), minimum_magnet_length_m=minimum_magnet_length_m,
                     minimum_drift_length_m=minimum_drift_length_m)
-    result = radiation_aware_hybrid_continuation(
-        measure, lambda position: measure(position, independent=True),
-        initial_position=knobs.initial_position, bounds=knobs.bounds,
-        contract=HybridContinuationContract(**dict(contract)),
-        settings=HybridContinuationSettings(**dict(settings or {})),
-        measurement_identity=json.dumps(identity, sort_keys=True, allow_nan=False),
-        end_fraction=end_fraction, progress=progress, checkpoint=checkpoint, cancelled=cancelled)
-    result["candidate_lattice"] = candidate_for(knobs.apply(result["position"])).as_dict()
-    result["source"] = identity
-    result["parameterization"] = knobs.as_dict()
-    result["installation_slots"] = {k: {"s_start_m": v[0], "s_end_m": v[1]} for k, v in ranges.items()}
-    return result
+    declared = HybridContinuationContract(**dict(contract))
+    controls = HybridContinuationSettings(**dict(settings or {}))
+    from brilliance.numerical_evidence import NumericalEvidenceArchive
+    archive = NumericalEvidenceArchive.for_environment(
+        "periodic_hybrid", {"source": identity, "contract": asdict(declared),
+                            "settings": asdict(controls), "end_fraction": end_fraction},
+        parent_lattice=parent.as_dict())
+
+    def archive_checkpoint(state):
+        # This happens before returning to generated research/reporting code.
+        # Preserve all 18+ coordinates, original caps and the exact cell metadata.
+        if archive is not None:
+            archived_cell = candidate_for(knobs.apply(state["position"])).as_dict()
+            archive.snapshot(state, archived_cell, summary=hybrid_continuation_summary(state))
+        if checkpoint is not None:
+            checkpoint(deepcopy(state))
+
+    def is_cancelled():
+        return bool((archive is not None and archive.run is not None
+                     and archive.run.cancellation_requested()) or (cancelled and cancelled()))
+
+    try:
+        result = radiation_aware_hybrid_continuation(
+            measure, lambda position: measure(position, independent=True),
+            initial_position=knobs.initial_position, bounds=knobs.bounds,
+            contract=declared, settings=controls,
+            measurement_identity=json.dumps(identity, sort_keys=True, allow_nan=False),
+            end_fraction=end_fraction, progress=progress, checkpoint=archive_checkpoint,
+            cancelled=is_cancelled)
+        selected_rows = knobs.apply(result["position"])
+        selected_cell = candidate_for(selected_rows)
+        result["candidate_lattice"] = selected_cell.as_dict()
+        result["source"] = identity
+        result["parameterization"] = knobs.as_dict()
+        result["installation_slots"] = {k: {"s_start_m": v[0], "s_end_m": v[1]} for k, v in ranges.items()}
+        if archive is not None:
+            # An explicit IR repetition, NOT a new JuTrack full-ring validation.
+            # It prevents reporting wrappers from mislabelling one cell as a ring.
+            ring = api.cell_ring(title="Archived hybrid pilot ring (validation required)",
+                energy_gev=parent.energy_gev, cell=selected_rows, periods=periods,
+                source=SCHEMA, parent_lattice_id=selected_cell.lattice_id)
+            result["numerical_evidence_directory"] = str(archive.directory)
+            result["full_ring_validation_required"] = True
+            archive.complete(result, ring_lattice=ring.as_dict())
+        return result
+    except Exception as exc:
+        if archive is not None:
+            archive.failed(exc)
+        raise
