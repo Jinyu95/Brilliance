@@ -39,6 +39,7 @@ from .hybrid_shape import (
 from .hybrid_shape import (
     validate_hybrid_mba_shape_report as _validate_hybrid_mba_shape_report,
 )
+from .periodic_hybrid import match_periodic_hybrid as _match_periodic_hybrid
 from .physics_references import (
     TMECellTargets as _TMECellTargets,
 )
@@ -64,6 +65,7 @@ HybridMBAOuterReplacement = python_tool()(_HybridMBAOuterReplacement)
 build_outer_dba_section = python_tool()(_build_outer_dba_section)
 match_outer_dba_section = python_tool()(_match_outer_dba_section)
 explore_hybrid_mba = python_tool()(_explore_hybrid_mba)
+match_periodic_hybrid = python_tool()(_match_periodic_hybrid)
 measure_core_optics = python_tool()(_measure_core_optics)
 compare_core_optics = python_tool()(_compare_core_optics)
 
