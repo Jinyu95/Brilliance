@@ -50,6 +50,21 @@ Local SLSQP execution now qualifies as optimizer execution evidence in the gener
 finish check. An identity-only call does not. Existing scientific acceptance
 validators and working-lattice promotion requirements are unchanged.
 
+## Saved-program timeout routing
+
+The agent-facing `run_program.timeout_s` already allowed values up to seven days,
+while `accelerator.run_research_program` rejected values above 600 s at its typed
+argument boundary. That mismatch caused errors such as:
+
+`ExpertModuleError: expert tool 'accelerator.run_research_program' argument 'timeout_s' exceeds its maximum`
+
+The short tool still has a 600 s declared/default timeout, but its argument schema
+now accepts runtime estimates up to 604800 s. This lets the existing host router
+inspect the active model-turn deadline and submit work as a managed calculation
+when the requested runtime no longer fits the turn, instead of failing before the
+router can act. The durable tool keeps its existing seven-day estimate contract.
+No `.env` change is required for this fix.
+
 ## Tests actually executed
 
 Linux, Python 3.13.5, NumPy 2.3.5, SciPy 1.17.0, pytest 9.0.2:
@@ -66,6 +81,13 @@ canonical finish tables/downloads, and the actual expert-adapter-to-runtime path
 That path uses explicit accelerator API doubles, not actual JuTrack. The generic
 finish tests isolate registry validation with a test double. Tests of ordinary
 SLSQP use toy functions, not accelerator models.
+
+A further timeout-routing regression file, `tests/test_program_timeout_routing.py`,
+checks that the short-tool default stays at 600 s, its schema accepts longer runtime
+estimates, the durable tool keeps 604800 s, and the existing deadline-based host
+router selects managed execution when a long estimate cannot fit the current turn.
+This small follow-up was source-reviewed and syntax-checked here; it has not yet
+been rerun in the user's Windows/JuTrack environment.
 
 Original production sources copied for local execution were checked against their
 Git blob hashes. All changed Python files also pass a Python 3.10 grammar AST
