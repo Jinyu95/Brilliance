@@ -373,6 +373,11 @@ def _slot_ranges(rows, roles, slots, minimum_slot_length_m):
 def _profile_measurement(linear, radiation, ranges, core_region):
     """Extract measured slot endpoints and sampled core envelopes, not line Twiss."""
     profile = linear["twiss_profile"]
+    fields = ("s_m", "Dx", "Dpx", "beta_x", "beta_y", "alpha_x")
+    values = np.asarray([[p[key] for key in fields] for p in profile], dtype=float)
+    if (values.ndim != 2 or len(values) < 2 or not np.all(np.isfinite(values))
+            or np.any(values[:, 3:5] <= 0) or np.any(np.diff(values[:, 0]) < -1e-10)):
+        raise ValueError("Require a finite ordered profile with positive beta in both planes")
     def at(s):
         point = min(profile, key=lambda p: abs(p["s_m"] - s))
         if abs(point["s_m"] - s) > 1e-8:
