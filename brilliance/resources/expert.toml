@@ -21,7 +21,7 @@ priority = 75
 [[tools]]
 id = "accelerator.run_research_program"
 title = "Run a saved research program"
-description = "Run a short model-authored Python program from the project workspace with immutable inputs and archived typed outputs."
+description = "Run a short model-authored Python program from the project workspace with immutable inputs and archived typed outputs. The short-run default remains 600 s; larger timeout estimates are accepted so the host can route work to managed execution instead of rejecting the call at schema validation."
 entrypoint = "brilliance.expert_builtin:execute_research_program"
 validator_entrypoint = "brilliance.expert_builtin:validate_saved_research_program"
 authority = "provisional"
@@ -44,8 +44,9 @@ default = {}
 [tools.parameters.properties.timeout_s]
 type = "integer"
 minimum = 1
-maximum = 600
+maximum = 604800
 default = 600
+description = "Requested runtime allowance/estimate. The short-run default is 600 s; longer requests are accepted at the schema boundary so Brilliance can route them to managed execution when they no longer fit the active model turn."
 
 [tools.parameters.properties.require_optimizer_evidence]
 type = "boolean"
