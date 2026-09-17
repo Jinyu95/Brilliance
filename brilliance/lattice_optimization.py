@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import math
 from dataclasses import dataclass
+from numbers import Real
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -29,6 +30,7 @@ from .population_optimization import (
     _publish_progress,
     particle_swarm_optimize,
 )
+from .research_outcomes import ResearchInfeasible
 
 LatticeRows = Sequence[Mapping[str, Any]]
 MetricEvaluator = Callable[[list[dict[str, Any]]], Mapping[str, Any]]
@@ -200,6 +202,15 @@ class LatticeParameterization:
         index_by_name = {item.name: index for index, item in enumerate(self.knobs)}
         for constraint in self.sum_constraints:
             knob_indices = [index_by_name[name] for name in constraint.variable_names]
+            if constraint.mode == "bounded_sum":
+                from .experiment_geometry import project_weighted_sum
+
+                projected[knob_indices] = project_weighted_sum(
+                    projected[knob_indices], lower[knob_indices], upper[knob_indices],
+                    [len(self.knobs[index].target_indices) for index in knob_indices],
+                    constraint.target,
+                )
+                continue
             current = sum(
                 projected[index] * len(self.knobs[index].target_indices) for index in knob_indices
             )
@@ -304,6 +315,14 @@ class JuTrackLatticeEditor:
         target = self.lattice if lattice is None else lattice
         rows = _rows(elements)
         require_same_lattice_topology(self.rows, rows)
+        from .jutrack_service import native_element_options
+        from .lattice import LatticeElementIR
+        for original, proposed in zip(self.rows, rows):
+            if native_element_options(LatticeElementIR.from_mapping(original)) != native_element_options(LatticeElementIR.from_mapping(proposed)):
+                raise LatticeInputError(
+                    f"{proposed['name']}: native constructor fields changed; build a new JuTrack editor. "
+                    "No scalar fields were changed."
+                )
         for row in rows:
             name = str(row["name"])
             element = target[self.index_by_name[name]]
@@ -409,6 +428,14 @@ class JuTrackLatticeEditor:
         return result
 
 
+def _is_jutrack_twiss_domain_error(exc: Exception) -> bool:
+    """Recognize only JuTrack's documented propagation square-root failure."""
+    return (type(exc).__name__ == "JuliaError"
+            and type(exc).__module__.split(".")[0] == "juliacall"
+            and "DomainError" in str(exc)
+            and "negative sqrt argument in twissPropagate" in str(exc))
+
+
 def jutrack_linear_metrics(
     jt: Any,
     lattice: Any,
@@ -423,10 +450,8 @@ def jutrack_linear_metrics(
             raise TypeError(f"JuTrack findm66 must return a 6x6 matrix; got {matrix.shape}")
         trace_x = float(np.trace(matrix[:2, :2]))
         trace_y = float(np.trace(matrix[2:4, 2:4]))
-    except (TypeError, AttributeError, KeyError, IndexError, NameError, OSError, MemoryError):
-        raise
-    except Exception as exc:
-        return {"stable": False, "failure": f"{type(exc).__name__}: {exc}"}
+    except ResearchInfeasible as exc:
+        return _physical_rejection(exc)
     if (
         not np.all(np.isfinite(matrix))
         or abs(trace_x) >= 2.0
@@ -435,7 +460,14 @@ def jutrack_linear_metrics(
         return {"stable": False, "trace_x": trace_x, "trace_y": trace_y}
     try:
         periodic = jt.periodicEdwardsTengTwiss(lattice, 0.0, 0)
+        # JuTrack explicitly returns mode=0 for an undecouplable/unstable map.
+        # Do not confuse this sentinel with a failed bridge call or bad API.
+        if getattr(periodic, "mode", 1) == 0:
+            return {"stable": False, "trace_x": trace_x, "trace_y": trace_y,
+                    "reason": "JuTrack periodic Twiss returned invalid mode=0"}
         tune = [float(item) for item in jt.gettune(lattice)]
+        if len(tune) != 2:
+            raise TypeError(f"JuTrack gettune must return two tunes; got {len(tune)}")
         metrics: dict[str, Any] = {
             "stable": True,
             "trace_x": trace_x,
@@ -444,9 +476,17 @@ def jutrack_linear_metrics(
             "tune_y": tune[1],
             "Dx_m": float(periodic.dx),
             "Dpx": float(periodic.dpx),
+            "Dy_m": float(periodic.dy),
+            "Dpy": float(periodic.dpy),
             "beta_x_m": float(periodic.betax),
             "beta_y_m": float(periodic.betay),
+            "alpha_x": float(periodic.alphax),
+            "alpha_y": float(periodic.alphay),
         }
+        if (not all(math.isfinite(value) for key, value in metrics.items() if key != "stable")
+                or metrics["beta_x_m"] <= 0 or metrics["beta_y_m"] <= 0):
+            return {"stable": False, "trace_x": trace_x, "trace_y": trace_y,
+                    "reason": "JuTrack periodic Twiss has nonfinite or nonpositive physical optics"}
         if include_profile:
             points = jt.twissline(
                 periodic,
@@ -461,6 +501,7 @@ def jutrack_linear_metrics(
                     "beta_x": float(point.betax), "beta_y": float(point.betay),
                     "alpha_x": float(point.alphax), "alpha_y": float(point.alphay),
                     "Dx": float(point.dx), "Dpx": float(point.dpx),
+                    "Dy": float(point.dy), "Dpy": float(point.dpy),
                 }
 
             # Same positional contract as evaluate(): START, then element exits.
@@ -479,9 +520,14 @@ def jutrack_linear_metrics(
             )
             metrics["twiss_profile"] = profile
         return metrics
-    except (TypeError, AttributeError, KeyError, IndexError, NameError, OSError, MemoryError):
-        raise
+    except ResearchInfeasible as exc:
+        return _physical_rejection(exc)
     except Exception as exc:
+        # This is the specific physical-domain failure emitted by JuTrack's
+        # _checked_sqrt in EdwardsTengTwiss.jl. Never classify arbitrary Julia
+        # MethodError, Python RuntimeError, or profile-shape ValueError as optics.
+        if not _is_jutrack_twiss_domain_error(exc):
+            raise
         return {
             "stable": False,
             "trace_x": trace_x,
@@ -549,6 +595,8 @@ def jutrack_radiation_metrics(jt: Any, lattice: Any, *, energy_gev: float) -> di
     metrics: dict[str, Any] = {
         "computed": True,
         "method": "JuTrack ringpara",
+        "physical_element_treatment": "intact_original_elements",
+        "physical_element_count": len(lattice),
         "I1": float(values["I1"]),
         "I2": float(values["I2"]),
         "I3": float(values["I3"]),
@@ -589,7 +637,7 @@ def jutrack_periodic_radiation_metrics(
     """
 
     count = int(periods)
-    if count < 1 or count != periods:
+    if isinstance(periods, bool) or count < 1 or count != periods:
         raise ValueError("periods must be a positive integer")
     metrics: dict[str, Any] = dict(
         jutrack_radiation_metrics(jt, periodic_cell_lattice, energy_gev=energy_gev)
@@ -736,6 +784,7 @@ def infer_mirror_symmetric_parameterization(
     k3_bounds: Sequence[float] | None = None,
     minimum_length_m: float = 1.0e-4,
     fixed_element_names: Sequence[str] = (),
+    included_element_names_by_field: Mapping[str, Sequence[str]] | None = None,
     excluded_element_names_by_field: Mapping[str, Sequence[str]] | None = None,
     excluded_roles_by_field: Mapping[str, Sequence[str]] | None = None,
     exact_sum_by_field: Mapping[str, float] | None = None,
@@ -749,6 +798,9 @@ def infer_mirror_symmetric_parameterization(
     must be supplied for every actually inferred strength field: element rows
     do not declare beam energy, aperture, or magnet technology. Geometry-only
     inference and excluded/fixed strength fields need no strength bounds.
+    When ``included_element_names_by_field`` is provided, ONLY the explicitly
+    listed element/field pairs are varied. List both global mirror partners;
+    unlisted fields remain fixed, including lengths of strength-only magnets.
     """
 
     rows = _rows(elements)
@@ -758,6 +810,25 @@ def infer_mirror_symmetric_parameterization(
         raise ValueError(f"unsupported inferred fields: {invalid}")
     if not requested:
         raise ValueError("fields must not be empty")
+    inclusions = None
+    if included_element_names_by_field is not None:
+        inclusions = {}
+        known_names = {row["name"] for row in rows}
+        for field, names in included_element_names_by_field.items():
+            if field not in requested:
+                raise OptimizerInputError(f"included field {field!r} must also appear in fields")
+            if isinstance(names, (str, bytes)):
+                raise OptimizerInputError(f"included {field} names must be a sequence, not a string")
+            selected = {str(name) for name in names}
+            unknown = selected - known_names
+            if unknown:
+                raise OptimizerInputError(f"unknown included {field} elements: {sorted(unknown)}")
+            incompatible = [row["name"] for row in rows if row["name"] in selected
+                            and (_field_value(row, field) is None or
+                                 (_FIELD_KINDS[field] is not None and row["kind"] not in _FIELD_KINDS[field]))]
+            if incompatible:
+                raise OptimizerInputError(f"elements do not support included {field}: {incompatible}")
+            inclusions[field] = selected
     fixed = {str(item) for item in fixed_element_names}
     name_exclusions = {
         str(field): {str(name) for name in names}
@@ -775,6 +846,16 @@ def infer_mirror_symmetric_parameterization(
         "k3_m4": "m^-4",
     }
     specs: list[dict[str, Any]] = []
+    missing_sum_fields = set(exact_sum_by_field or {}) - set(requested)
+    if inclusions is not None:
+        missing_sum_fields |= {field for field in (exact_sum_by_field or {}) if not inclusions.get(field)}
+    if missing_sum_fields:
+        raise OptimizerInputError(
+            f"Exact sum fields have no selected variables: {sorted(missing_sum_fields)}. "
+            "An inclusion map selects ONLY the listed element/field pairs. Include both "
+            "mirror partners for each intended tunable field, or omit that field's exact sum "
+            "only if it is intentionally fixed and audited separately."
+        )
     for left in range((len(rows) + 1) // 2):
         right = len(rows) - 1 - left
         pair = (left,) if left == right else (left, right)
@@ -787,6 +868,17 @@ def infer_mirror_symmetric_parameterization(
             )
         pair_names = [str(rows[index]["name"]) for index in pair]
         for field in requested:
+            if inclusions is not None:
+                selected = inclusions.get(field, set())
+                if not selected.intersection(pair_names):
+                    continue
+                if not set(pair_names) <= selected:
+                    raise OptimizerInputError(f"included {field} must list both global mirror partners: {pair_names}")
+                if (set(pair_names) & (fixed | name_exclusions.get(field, set())) or any(
+                    str(_metadata(rows[index], "design_role") or "") in exclusions.get(field, set())
+                    for index in pair
+                )):
+                    raise OptimizerInputError(f"included {field} conflicts with fixed/excluded elements: {pair_names}")
             allowed_kinds = _FIELD_KINDS[field]
             if allowed_kinds is not None and left_kind not in allowed_kinds:
                 continue
@@ -860,7 +952,7 @@ def infer_mirror_symmetric_parameterization(
         field_specs = [spec for spec in specs if spec["field"] == field]
         variable_names = [spec["name"] for spec in field_specs]
         if not variable_names:
-            raise ValueError(f"exact sum requested for {field} but it has no variables")
+            raise OptimizerInputError(f"exact sum requested for {field} but it has no variables")
         controlled_indices = {
             int(index)
             for spec in field_specs
@@ -943,18 +1035,123 @@ def _target_arrays(targets: Mapping[str, Any]) -> tuple[tuple[str, ...], np.ndar
 def _residual(
     metrics: Mapping[str, Any], names: Sequence[str], target: np.ndarray, tolerance: np.ndarray
 ) -> np.ndarray | None:
-    if metrics.get("stable") is False:
+    metrics = _metric_result(metrics)
+    if metrics.get("stable") is False or metrics.get("feasible") is False:
         return None
     values: list[float] = []
     for name in names:
-        try:
-            value = float(metrics[name])
-        except (KeyError, TypeError, ValueError):
-            return None
+        if name not in metrics:
+            raise KeyError(f"evaluate_metrics omitted requested matching observable {name!r}")
+        value = _callback_number(metrics[name], f"evaluate_metrics[{name!r}]")
         if not math.isfinite(value):
-            return None
+            raise ValueError(f"evaluate_metrics[{name!r}] must be finite unless stable=False or feasible=False")
         values.append(value)
     return (np.asarray(values, dtype=float) - target) / tolerance
+
+
+def _callback_number(value: Any, label: str) -> float:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+        raise TypeError(f"{label} must be a real scalar, not {type(value).__name__}")
+    return float(value)
+
+
+def _callback_mapping(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{label} must return a mapping, not {type(value).__name__}")
+    result = dict(value)
+    for flag in ("stable", "feasible"):
+        if flag in result:
+            if not isinstance(result[flag], (bool, np.bool_)):
+                raise TypeError(f"{label}[{flag!r}] must be a boolean")
+            result[flag] = bool(result[flag])
+    return result
+
+
+def _metric_result(value: Any) -> dict[str, Any]:
+    return _callback_mapping(value, "evaluate_metrics")
+
+
+def _physical_rejection(exc: ResearchInfeasible) -> dict[str, Any]:
+    return {"stable": False, "feasible": False, "failure": str(exc),
+            "rejection_code": exc.code, "diagnostics": copy.deepcopy(exc.diagnostics)}
+
+
+def _call_metrics(evaluate_metrics: MetricEvaluator, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    supplied = copy.deepcopy(rows)
+    before = _physical_rows_key(supplied)
+    try:
+        result = _metric_result(evaluate_metrics(supplied))
+    except ResearchInfeasible as exc:
+        result = _physical_rejection(exc)
+    if _physical_rows_key(supplied) != before:
+        raise ValueError("evaluate_metrics changed physical lattice rows; matching callbacks must evaluate the supplied candidate without changing its coordinates")
+    return result
+
+
+def _objective_result(value: Any, objective_names: Sequence[str]) -> dict[str, Any]:
+    """Validate callback protocol before invalid shapes can masquerade as physics."""
+    result = _callback_mapping(value, "evaluate_objectives")
+    violations = result.get("constraint_violations", {})
+    if not isinstance(violations, Mapping):
+        raise TypeError("evaluate_objectives['constraint_violations'] must be a mapping")
+    clean = {}
+    for name, supplied in violations.items():
+        number = _callback_number(supplied, f"constraint_violations[{name!r}]")
+        if math.isnan(number) or number == -math.inf:
+            raise ValueError(f"constraint_violations[{name!r}] cannot be NaN or negative infinity")
+        clean[str(name)] = max(0.0, number)
+    result["constraint_violations"] = clean
+    aggregate = result.get("constraint_violation", sum(clean.values()))
+    aggregate = _callback_number(aggregate, "constraint_violation")
+    if math.isnan(aggregate) or aggregate == -math.inf:
+        raise ValueError("constraint_violation cannot be NaN or negative infinity")
+    rejected = (result.get("stable") is False or result.get("feasible") is False
+                or aggregate > 1e-12 or any(v > 1e-12 for v in clean.values()))
+    objectives = result.get("objectives", result.get("objective_values", {}))
+    if not isinstance(objectives, Mapping):
+        raise TypeError("evaluate_objectives['objectives'] must be a mapping of objective names to real scalars")
+    normalized = dict(objectives)
+    for name in objective_names:
+        if name not in objectives:
+            if rejected:
+                normalized[name] = math.inf
+                continue
+            raise KeyError(f"evaluate_objectives omitted requested objective {name!r}")
+        if objectives[name] is None and rejected:
+            number = math.inf
+        else:
+            number = _callback_number(objectives[name], f"objectives[{name!r}]")
+        if not math.isfinite(number):
+            if not rejected:
+                raise ValueError(f"objectives[{name!r}] must be finite for an admissible candidate; explicitly reject invalid physics")
+            number = math.inf
+        normalized[name] = number
+    result["objectives"] = normalized
+    result["feasible"] = not rejected
+    return result
+
+
+def _call_objectives(evaluate_objectives: ObjectiveEvaluator, rows: list[dict[str, Any]],
+                     objective_names: Sequence[str]) -> dict[str, Any]:
+    supplied = copy.deepcopy(rows)
+    before = _physical_rows_key(supplied)
+    try:
+        result = _objective_result(evaluate_objectives(supplied), objective_names)
+    except ResearchInfeasible as exc:
+        result = _objective_result(_physical_rejection(exc), objective_names)
+    if _physical_rows_key(supplied) != before:
+        raise ValueError("evaluate_objectives changed physical lattice rows; declare those variables in the matcher or return an independently validated candidate outside this optimization callback")
+    return result
+
+
+def _apply_design_proposal(parameterization, position, baseline):
+    try:
+        return parameterization.apply(position, base_elements=baseline)
+    except ValueError as exc:
+        if not str(exc).startswith(("exact sum projection moves", "cannot scale")):
+            raise
+        raise ResearchInfeasible(str(exc), code="exact_sum_projection_outside_bounds",
+                                 diagnostics={"position": list(map(float, position))}) from exc
 
 
 def bounded_response_match(
@@ -968,7 +1165,12 @@ def bounded_response_match(
     finite_difference_fraction: float = 2.0e-3,
     initial_trust_fraction: float = 0.15,
 ) -> dict[str, Any]:
-    """Match declared knobs with a bounded finite-difference response matrix."""
+    """Match declared knobs with a bounded finite-difference response matrix.
+
+    Callbacks return named finite scalar observables, or explicitly reject a
+    candidate with stable=False/feasible=False/ResearchInfeasible. They do not
+    mutate the supplied rows. Programming and runtime exceptions propagate.
+    """
 
     names, target, tolerance = _target_arrays(targets)
     position = np.asarray(
@@ -987,10 +1189,7 @@ def bounded_response_match(
     def evaluate(pos: np.ndarray) -> tuple[list[dict[str, Any]], dict[str, Any], np.ndarray | None]:
         nonlocal evaluations
         rows = parameterization.apply(pos, base_elements=elements)
-        try:
-            metrics = dict(evaluate_metrics(rows))
-        except Exception as exc:
-            metrics = {"stable": False, "failure": f"{type(exc).__name__}: {exc}"}
+        metrics = _call_metrics(evaluate_metrics, rows)
         evaluations += 1
         return rows, metrics, _residual(metrics, names, target, tolerance)
 
@@ -1165,10 +1364,7 @@ def bounded_fast_response_match(
         if evaluations >= budget:
             return None
         rows = parameterization.apply(pos, base_elements=elements)
-        try:
-            metrics = dict(evaluate_metrics(rows))
-        except Exception as exc:
-            metrics = {"stable": False, "failure": f"{type(exc).__name__}: {exc}"}
+        metrics = _call_metrics(evaluate_metrics, rows)
         evaluations += 1
         return rows, metrics, _residual(metrics, names, target, tolerance)
 
@@ -1522,11 +1718,10 @@ def search_feasible_parameter_seeds(
         else:
             position = rng.uniform(lower, upper)
         rows = parameterization.apply(position, base_elements=elements)
-        try:
-            metrics = dict(evaluate_metrics(rows))
-        except Exception:
-            continue
-        if metrics.get("stable") is not True:
+        metrics = _call_metrics(evaluate_metrics, rows)
+        if "stable" not in metrics and "feasible" not in metrics:
+            raise KeyError("Feasible seed screening requires an explicit stable or feasible boolean")
+        if metrics.get("stable") is False or metrics.get("feasible") is False:
             continue
         numeric = [
             float(value)
@@ -1534,7 +1729,7 @@ def search_feasible_parameter_seeds(
             if isinstance(value, (int, float)) and not isinstance(value, bool)
         ]
         if numeric and not all(math.isfinite(value) for value in numeric):
-            continue
+            raise ValueError("Feasible seed callback returned nonfinite scalar metrics without an explicit physical rejection")
         stable_count += 1
         residual = _residual(metrics, names, target, tolerance) if names else None
         score = float(np.linalg.norm(residual)) if residual is not None else 0.0
@@ -1588,15 +1783,13 @@ class _LatticeWorkerEvaluatorFactory:
         def cached_metrics(rows: list[dict[str, Any]]) -> Mapping[str, Any]:
             key = _physical_rows_key(rows)
             if key not in metric_cache:
-                metric_cache[key] = dict(evaluate_metrics(rows))
+                metric_cache[key] = _call_metrics(evaluate_metrics, rows)
             return metric_cache[key]
 
         def evaluate(position: np.ndarray) -> Mapping[str, Any]:
             try:
                 matching_start, warm_start_source = warm_starts.nearest(position)
-                target = self.design_parameterization.apply(
-                    position, base_elements=self.baseline_elements
-                )
+                target = _apply_design_proposal(self.design_parameterization, position, self.baseline_elements)
                 matched = bounded_fast_response_match(
                     target,
                     self.matching_parameterization,
@@ -1617,24 +1810,20 @@ class _LatticeWorkerEvaluatorFactory:
                             "evaluation_budget": matched.get("evaluation_budget"),
                         },
                     }
-                matched_rows = list(matched["elements"])
+                matched_rows = copy.deepcopy(matched["elements"])
                 warm_starts.record(position, matched["position"])
-                raw = dict(evaluate_objectives(matched_rows))
+                raw = _call_objectives(evaluate_objectives, matched_rows, self.objective_names)
                 raw["matching"] = {
                     "reason": matched["reason"],
                     "evaluations": matched["evaluations"],
                     "position": matched["position"],
                     "metrics": matched["metrics"],
                     "warm_start_source": warm_start_source,
+                    "elements": copy.deepcopy(matched_rows),
                 }
                 return raw
-            except Exception as exc:
-                return {
-                    "objectives": {name: math.inf for name in self.objective_names},
-                    "constraint_violations": {"parameterization_or_evaluation": 1.0e6},
-                    "feasible": False,
-                    "failure": f"{type(exc).__name__}: {exc}",
-                }
+            except ResearchInfeasible as exc:
+                return _objective_result(_physical_rejection(exc), self.objective_names)
 
         return evaluate
 
@@ -1643,10 +1832,11 @@ def _physical_rows_key(rows: LatticeRows) -> tuple[Any, ...]:
     return tuple(
         (
             str(row["name"]),
+            str(row["kind"]),
             *(
                 None
                 if _field_value(row, field) is None
-                else round(float(_field_value(row, field)), 13)
+                else float(_field_value(row, field))
                 for field in sorted(_PHYSICAL_FIELDS)
             ),
         )
@@ -1701,6 +1891,106 @@ class _MatchingWarmStartBank:
             del self._entries[1]
 
 
+def plan_lattice_optimization(
+    design_parameterization: LatticeParameterization,
+    matching_parameterization: LatticeParameterization,
+    *,
+    population_size: int | None = None,
+    generations: int | None = None,
+    minimum_population_per_knob: float = 10.0,
+    minimum_production_generations: int = 20,
+) -> dict[str, Any]:
+    """Validate ownership and size a campaign from its ACTUAL compiled knobs.
+
+    Pure Python: no JuTrack import, callbacks, workers or optimization. Call
+    before creating simulation objects and show ``knob_table`` to the user.
+    Managed research promotes undersized budgets using the scientist's runtime
+    configuration before allocating seeds or workers. Standalone calls retain
+    explicit caller-declared budget checks for lightweight kernel tests.
+    This is a coding preflight, NOT a claim of physical feasibility/convergence.
+    """
+    def integer(value: Any, name: str, minimum: int) -> int:
+        number = _finite_number(value)
+        if isinstance(value, bool) or number is None or number < minimum or number != int(number):
+            raise OptimizerInputError(f"{name} must be an integer >= {minimum}")
+        return int(number)
+
+    count = len(design_parameterization.knobs)
+    if not count:
+        raise OptimizerInputError("optimization needs at least one outer design knob")
+    ratio = _finite_number(minimum_population_per_knob)
+    if ratio is None or ratio < 0:
+        raise OptimizerInputError("minimum_population_per_knob must be finite and non-negative")
+    minimum_generations = integer(minimum_production_generations, "minimum_production_generations", 0)
+    generation_count = integer(generations, "generations", 1) if generations is not None else 80
+    requested_population = integer(population_size, "population_size", 2) if population_size is not None else None
+    from .optimization_budget import resolve_population_budget
+
+    budget = resolve_population_budget(count, requested_population,
+                                       generation_count if generations is not None else None)
+    if budget["managed_research"]:
+        ratio = budget["policy"]["minimum_population_per_knob"]
+        minimum_generations = budget["policy"]["minimum_generations"]
+        generation_count = budget["effective"]["generations"]
+    if generation_count < minimum_generations:
+        raise OptimizerInputError(
+            f"generations={generations} is below the declared production minimum "
+            f"of {minimum_generations}; pass minimum_production_generations=0 only "
+            "for an explicitly labelled smoke test"
+        )
+    design_ownership = {(name, knob.field) for knob in design_parameterization.knobs
+                        for name in knob.target_names}
+    matching_ownership = {(name, knob.field) for knob in matching_parameterization.knobs
+                          for name in knob.target_names}
+    overlap = sorted(design_ownership & matching_ownership)
+    if overlap:
+        rendered = ", ".join(f"{name}.{field}" for name, field in overlap[:8])
+        raise OptimizerInputError(
+            "outer design and in-objective matcher cannot own the same lattice field: " + rendered
+        )
+    required_population = max(2, math.ceil(ratio * count))
+    population = max(500, required_population) if population_size is None else integer(
+        population_size, "population_size", 2
+    )
+    if budget["managed_research"]:
+        required_population = budget["policy"]["population_floor"]
+        population = budget["effective"]["population_size"]
+    by_field = design_parameterization.as_dict()["variable_count_by_field"]
+    if population < required_population:
+        raise OptimizerInputError(
+            f"population_size={population} is below the declared production minimum "
+            f"of {required_population} for {count} outer knobs (by field: {by_field}). "
+            "Review the compiled element/field ownership, then size the population from "
+            "plan_lattice_optimization. Do not lower the production policy or alter physics limits."
+        )
+    if budget["effective"] != {"population_size": population, "generations": generation_count}:
+        budget["effective"] = {"population_size": population, "generations": generation_count}
+        budget["summary"] = (f"PSO budget: {population} particles for {generation_count} "
+                             f"generations ({count} knobs), including the caller-declared planner minimum.")
+    table = []
+    for owner, parameterization in (("outer_design", design_parameterization),
+                                     ("inner_matching", matching_parameterization)):
+        for knob in parameterization.knobs:
+            table.append({"owner": owner, "knob": knob.name, "field": knob.field,
+                          "elements": ", ".join(knob.target_names), "unit": knob.unit,
+                          "lower": knob.lower, "upper": knob.upper, "initial": knob.initial})
+    return {
+        "outer_knobs": count,
+        "matching_knobs": len(matching_parameterization.knobs),
+        "outer_knobs_by_field": by_field,
+        "population_size": population,
+        "generations": generation_count,
+        "minimum_population": required_population,
+        "population_per_outer_knob": population / count,
+        "minimum_population_per_knob": ratio,
+        "minimum_production_generations": minimum_generations,
+        "knob_table": table,
+        "sum_constraints": design_parameterization.as_dict()["sum_constraints"],
+        "feasibility_checked": False,
+        "budget": budget,
+    }
+
+
 def optimize_lattice_parameters(
     baseline_elements: LatticeRows,
     design_parameterization: LatticeParameterization,
@@ -1710,8 +2000,8 @@ def optimize_lattice_parameters(
     *,
     match_targets: Mapping[str, Any],
     objective_names: Sequence[str],
-    population_size: int = 500,
-    generations: int = 40,
+    population_size: int | None = None,
+    generations: int | None = None,
     seed: int = 0,
     selection: str = "first_objective",
     seed_positions: Sequence[Sequence[float]] | None = None,
@@ -1750,19 +2040,47 @@ def optimize_lattice_parameters(
     must never be captured by that factory.
     """
 
-    baseline = _rows(baseline_elements)
-    design_ownership = {
-        (name, knob.field) for knob in design_parameterization.knobs for name in knob.target_names
-    }
-    matching_ownership = {
-        (name, knob.field) for knob in matching_parameterization.knobs for name in knob.target_names
-    }
-    overlap = sorted(design_ownership & matching_ownership)
-    if overlap:
-        rendered = ", ".join(f"{name}.{field}" for name, field in overlap[:8])
-        raise ValueError(
-            "outer design and in-objective matcher cannot own the same lattice field: " + rendered
+    if isinstance(objective_names, (str, bytes)):
+        raise OptimizerInputError("objective_names must be a nonempty sequence of distinct names")
+    objective_names = tuple(objective_names)
+    if (not objective_names or any(not isinstance(name, str) or not name.strip() for name in objective_names)
+            or len(set(objective_names)) != len(objective_names)):
+        raise OptimizerInputError("objective_names must be a nonempty sequence of distinct names")
+    if not callable(evaluate_metrics) or not callable(evaluate_objectives):
+        raise TypeError("evaluate_metrics and evaluate_objectives must be callable")
+    _target_arrays(match_targets)  # Validate shape before any callback or worker starts.
+    plan = plan_lattice_optimization(
+        design_parameterization, matching_parameterization,
+        population_size=population_size, generations=generations,
+        minimum_population_per_knob=minimum_population_per_knob,
+        minimum_production_generations=minimum_production_generations,
+    )
+    if resume:
+        if checkpoint_path is None:
+            raise OptimizerInputError("resume=True requires checkpoint_path")
+        from .optimization_budget import resolve_population_budget
+        from .population_optimization import _load_pso_checkpoint
+
+        saved = _load_pso_checkpoint(Path(checkpoint_path).resolve())
+        resumed_budget = resolve_population_budget(
+            len(design_parameterization.knobs), population_size, generations,
+            resumed_population_size=int(saved["contract"]["population_size"]),
+            completed_generation=int(saved["completed_generation"]),
+            saved_generation_target=(saved.get("budget", {}).get("effective", {}).get("generations")
+                                     if saved.get("budget") else None),
+            checkpoint_complete=bool(saved.get("complete")),
         )
+        plan.update(resumed_budget["effective"])
+        plan["population_per_outer_knob"] = plan["population_size"] / plan["outer_knobs"]
+        plan["budget"] = resumed_budget
+    population_size, generations = plan["population_size"], plan["generations"]
+    _publish_progress(progress_callback, "budget", {
+        "summary": plan["budget"]["summary"], "budget": plan["budget"],
+        "requested_population_size": plan["budget"]["requested"]["population_size"],
+        "requested_generations": plan["budget"]["requested"]["generations"],
+        "population_size": population_size, "total_generations": generations,
+    })
+    baseline = _rows(baseline_elements)
     if parallel_workers is None and worker_physics_factory is not None:
         from .research_environment import ResearchEnvironment
 
@@ -1773,16 +2091,16 @@ def optimize_lattice_parameters(
             else 1
         )
     else:
-        worker_count = int(parallel_workers or 1)
+        worker_count = int(parallel_workers) if parallel_workers is not None else 1
     worker_count = min(worker_count, max(1, int(population_size)))
     if worker_count < 1:
-        raise ValueError("parallel_workers must be positive")
+        raise OptimizerInputError("parallel_workers must be positive")
     if batch_evaluator_factory is not None and worker_physics_factory is not None:
-        raise ValueError(
+        raise OptimizerInputError(
             "use either batch_evaluator_factory or worker_physics_factory, not both"
         )
     if worker_count > 1 and worker_physics_factory is None and batch_evaluator_factory is None:
-        raise ValueError(
+        raise OptimizerInputError(
             "parallel JuTrack evaluation requires worker_physics_factory so every process "
             "can build independent Julia and lattice state"
         )
@@ -1792,51 +2110,35 @@ def optimize_lattice_parameters(
         validate_worker_factory(worker_physics_factory)
     basin_fraction = float(feasible_basin_population_fraction)
     if not math.isfinite(basin_fraction) or not 0.0 <= basin_fraction <= 1.0:
-        raise ValueError("feasible_basin_population_fraction must be between 0 and 1")
-    population_ratio = float(minimum_population_per_knob)
-    if not math.isfinite(population_ratio) or population_ratio < 0.0:
-        raise ValueError("minimum_population_per_knob must be finite and non-negative")
-    required_population = math.ceil(population_ratio * len(design_parameterization.knobs))
-    if int(population_size) < required_population:
-        raise ValueError(
-            f"population_size={population_size} is below the declared production minimum "
-            f"of {required_population} for {len(design_parameterization.knobs)} outer knobs"
-        )
-    minimum_generations = int(minimum_production_generations)
-    if minimum_generations < 0:
-        raise ValueError("minimum_production_generations must be non-negative")
-    if int(generations) < minimum_generations:
-        raise ValueError(
-            f"generations={generations} is below the declared production minimum "
-            f"of {minimum_generations}; pass minimum_production_generations=0 only "
-            "for an explicitly labelled smoke test"
-        )
+        raise OptimizerInputError("feasible_basin_population_fraction must be between 0 and 1")
+    population_ratio = plan["minimum_population_per_knob"]
+    minimum_generations = plan["minimum_production_generations"]
     attempts_per_particle = int(initialization_attempts_per_particle)
     if attempts_per_particle < 1:
-        raise ValueError("initialization_attempts_per_particle must be positive")
+        raise OptimizerInputError("initialization_attempts_per_particle must be positive")
     seed_sigma = float(initial_feasible_sigma_fraction)
     if not math.isfinite(seed_sigma) or not 0.0 < seed_sigma <= 0.25:
-        raise ValueError("initial_feasible_sigma_fraction must be in the interval (0, 0.25]")
+        raise OptimizerInputError("initial_feasible_sigma_fraction must be in the interval (0, 0.25]")
     inner_budget = int(inner_match_evaluation_budget)
     if inner_budget < 2:
-        raise ValueError("inner_match_evaluation_budget must be at least 2")
+        raise OptimizerInputError("inner_match_evaluation_budget must be at least 2")
     polish_budget = int(local_polish_evaluations)
     if polish_budget < 0:
-        raise ValueError("local_polish_evaluations cannot be negative")
+        raise OptimizerInputError("local_polish_evaluations cannot be negative")
     if 0 < polish_budget < 2 * len(design_parameterization.knobs):
-        raise ValueError(
+        raise OptimizerInputError(
             "a local polish must poll both directions of every outer knob; "
             f"use at least {2 * len(design_parameterization.knobs)} evaluations"
         )
     polish_step = float(local_polish_initial_step_fraction)
     if not math.isfinite(polish_step) or not 0.0 < polish_step <= 0.25:
-        raise ValueError("local_polish_initial_step_fraction must be in (0, 0.25]")
+        raise OptimizerInputError("local_polish_initial_step_fraction must be in (0, 0.25]")
     metric_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
 
     def cached_metrics(rows: list[dict[str, Any]]) -> Mapping[str, Any]:
         key = _physical_rows_key(rows)
         if key not in metric_cache:
-            metric_cache[key] = dict(evaluate_metrics(rows))
+            metric_cache[key] = _call_metrics(evaluate_metrics, rows)
         return metric_cache[key]
 
     _publish_progress(progress_callback, "baseline_matching", {
@@ -1852,8 +2154,6 @@ def optimize_lattice_parameters(
         max_iterations=max_match_iterations,
     )
     if not baseline_match["success"]:
-        from .research_outcomes import ResearchInfeasible
-
         target_names, target_values, target_tolerances = _target_arrays(match_targets)
         observations = [{"observable": name, "measured": baseline_match.get("metrics", {}).get(name),
                          "target": float(value), "tolerance": float(tolerance)}
@@ -1911,12 +2211,12 @@ def optimize_lattice_parameters(
         nonlocal matching_successes, matching_failures
         if cancellation_check is not None:
             cancellation_check()
-        key = tuple(round(float(value), 12) for value in position)
+        key = tuple(map(float, position))
         if key in cache:
             return cache[key]
         try:
             matching_start, warm_start_source = warm_starts.nearest(position)
-            target = design_parameterization.apply(position, base_elements=matched_baseline)
+            target = _apply_design_proposal(design_parameterization, position, matched_baseline)
             matched = bounded_fast_response_match(
                 target,
                 matching_parameterization,
@@ -1941,25 +2241,21 @@ def optimize_lattice_parameters(
                 }
             else:
                 matching_successes += 1
-                matched_rows = list(matched["elements"])
+                matched_rows = copy.deepcopy(matched["elements"])
                 warm_starts.record(position, matched["position"])
-                raw = dict(evaluate_objectives(matched_rows))
+                raw = _call_objectives(evaluate_objectives, matched_rows, objective_names)
                 raw["matching"] = {
                     "reason": matched["reason"],
                     "evaluations": matched["evaluations"],
                     "position": matched["position"],
                     "metrics": matched["metrics"],
                     "warm_start_source": warm_start_source,
+                    "elements": copy.deepcopy(matched_rows),
                 }
                 result = raw
-                matched_lattices[key] = matched_rows
-        except Exception as exc:
-            result = {
-                "objectives": {str(name): math.inf for name in objective_names},
-                "constraint_violations": {"parameterization_or_evaluation": 1.0e6},
-                "feasible": False,
-                "failure": f"{type(exc).__name__}: {exc}",
-            }
+                matched_lattices[key] = copy.deepcopy(matched_rows)
+        except ResearchInfeasible as exc:
+            result = _objective_result(_physical_rejection(exc), objective_names)
         cache[key] = result
         return result
 
@@ -1973,7 +2269,7 @@ def optimize_lattice_parameters(
         for index, position in enumerate(positions):
             if cancellation_check is not None:
                 cancellation_check()
-            key = tuple(round(float(value), 12) for value in position)
+            key = tuple(map(float, position))
             if key in cache:
                 results[index] = cache[key]
             else:
@@ -1986,12 +2282,16 @@ def optimize_lattice_parameters(
             for result_index, position, supplied in zip(
                 missing_indices, missing_positions, evaluated
             ):
-                raw = dict(supplied)
-                key = tuple(round(float(value), 12) for value in position)
+                raw = _objective_result(supplied, objective_names)
+                key = tuple(map(float, position))
                 cache[key] = raw
                 results[result_index] = raw
                 matching_info = raw.get("matching", {})
                 if isinstance(matching_info, Mapping):
+                    if "elements" in matching_info:
+                        actual = _rows(matching_info["elements"])
+                        require_same_lattice_topology(matched_baseline, actual)
+                        matched_lattices[key] = copy.deepcopy(actual)
                     count = int(matching_info.get("evaluations", 0))
                     matching_evaluation_counts.append(count)
                     if raw.get("feasible") is False and "in_objective_matching" in dict(
@@ -2017,7 +2317,11 @@ def optimize_lattice_parameters(
             "production_generations": 0,
             "matching_evaluations": baseline_match.get("evaluations", 0),
         })
-        initial_evaluation = dict(evaluate(initial_array))
+        try:
+            initial_evaluation = dict(evaluate(initial_array))
+        except Exception:
+            close_external_batch_evaluator()
+            raise
         initial_violations = dict(initial_evaluation.get("constraint_violations", {}))
         initial_is_feasible = bool(
             initial_evaluation.get(
@@ -2026,8 +2330,6 @@ def optimize_lattice_parameters(
             )
         ) and not any(float(value) > 1.0e-12 for value in initial_violations.values())
         if require_feasible_initial_population and not initial_is_feasible:
-            from .research_outcomes import ResearchInfeasible
-
             close_external_batch_evaluator()
             raise ResearchInfeasible(
                 "The initial seed failed the complete optimization objective contract. "
@@ -2152,8 +2454,6 @@ def optimize_lattice_parameters(
             if attempted == before:
                 break
         if len(accepted_seeds) < requested:
-            from .research_outcomes import ResearchInfeasible
-
             close_external_batch_evaluator()
             raise ResearchInfeasible(
                 "This initialization attempt did not find an all-feasible population: "
@@ -2340,15 +2640,20 @@ def optimize_lattice_parameters(
         }
     best = optimization["best_candidate"]
     key = tuple(
-        round(float(best["variables"][name]), 12) for name in design_parameterization.variable_names
+        float(best["variables"][name]) for name in design_parameterization.variable_names
     )
     selected_elements = matched_lattices.get(key)
     if selected_elements is None:
         matching_info = best.get("metrics", {}).get("matching", {})
+        if isinstance(matching_info, Mapping) and "elements" in matching_info:
+            selected_elements = _rows(matching_info["elements"])
+            require_same_lattice_topology(matched_baseline, selected_elements)
         matching_position = (
             matching_info.get("position") if isinstance(matching_info, Mapping) else None
         )
-        if isinstance(matching_position, (list, tuple)):
+        # Older checkpoints may only contain full-precision coordinates. New
+        # receipts carry the exact post-match rows, including process workers.
+        if selected_elements is None and isinstance(matching_position, (list, tuple)):
             selected_geometry = design_parameterization.apply(
                 [best["variables"][name] for name in design_parameterization.variable_names],
                 base_elements=matched_baseline,
@@ -2391,6 +2696,7 @@ def optimize_lattice_parameters(
     }
     return {
         **optimization,
+        "optimization_plan": plan,
         "parameterization": design_parameterization.as_dict(),
         "matching_parameterization": matching_parameterization.as_dict(),
         "selected_elements": selected_elements,

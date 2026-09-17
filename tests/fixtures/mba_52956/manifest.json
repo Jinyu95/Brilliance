@@ -1,0 +1,175 @@
+{
+  "source_project": "project-43020af6b28939",
+  "source_result": "research_projects\\project-43020af6b28939\\workspace\\artifacts\\programs\\program-330aa66bc1d3c149147a\\result.json",
+  "machine_contract": {
+    "achromat_dpx_tolerance": 1e-05,
+    "achromat_dx_tolerance_m": 0.0001,
+    "energy_gev": 3.5,
+    "expected_bends": 7,
+    "expected_cell_angle_rad": 0.19634954084936207,
+    "expected_cell_length_m": 25.0,
+    "id_drift_names": [
+      "ID:L",
+      "ID:R"
+    ],
+    "id_length_m": 6.0,
+    "limit_provenance": {
+      "aspirations_not_requirements": {
+        "achromat_dpx_tolerance": 1e-05,
+        "achromat_dx_tolerance_m": 0.0001,
+        "maximum_beta_m": 30.0,
+        "maximum_emittance_pm": null,
+        "maximum_energy_spread": null,
+        "ring_trace_margin": 0.045
+      },
+      "declared_allocations": {
+        "dipole_length_range_m": [
+          0.8,
+          1.5
+        ],
+        "id_straight_m": 6.0,
+        "quadrupole_length_range_m": [
+          0.25,
+          0.5
+        ]
+      },
+      "engineering_minima": {
+        "minimum_drift_length_m": 0.05,
+        "minimum_magnet_length_m": 0.2
+      },
+      "scientist_requirements": {
+        "bends_per_cell": 7,
+        "circumference_target_m": 800.0,
+        "energy_gev": 3.5,
+        "periods": 32,
+        "scope": "prototype without nonlinear dynamics"
+      },
+      "strength_limits": "api.magnet_strength_limits(energy_gev=3.5)"
+    },
+    "limits": {
+      "brho_tm": 11.674743331935323,
+      "dipole_field_t": 1.2,
+      "energy_gev": 3.5,
+      "max_abs_k1_m2": 3.4261995199999995,
+      "max_abs_k2_m3": 256.96496399999995,
+      "minimum_bend_radius_m": 9.72895277661277,
+      "quadrupole_pole_tip_field_t": 0.8,
+      "quadrupole_radius_m": 0.02,
+      "sextupole_pole_tip_field_t": 0.6,
+      "sextupole_radius_m": 0.02
+    },
+    "maximum_beta_m": 30.0,
+    "maximum_emittance_pm": null,
+    "maximum_energy_spread": null,
+    "minimum_drift_length_m": 0.05,
+    "minimum_magnet_length_m": 0.2,
+    "periods": 32,
+    "profile_step_m": 0.05
+  },
+  "unit_groups": [
+    [
+      "U001:TME:D3_L",
+      "U001:TME:QFAR_L",
+      "U001:TME:D2_L",
+      "U001:TME:QNEAR_L",
+      "U001:TME:D1_L",
+      "U001:B",
+      "U001:TME:D1_R",
+      "U001:TME:QNEAR_R",
+      "U001:TME:D2_R",
+      "U001:TME:QFAR_R",
+      "U001:TME:D3_R"
+    ],
+    [
+      "U002:TME:D3_L",
+      "U002:TME:QFAR_L",
+      "U002:TME:D2_L",
+      "U002:TME:QNEAR_L",
+      "U002:TME:D1_L",
+      "U002:B",
+      "U002:TME:D1_R",
+      "U002:TME:QNEAR_R",
+      "U002:TME:D2_R",
+      "U002:TME:QFAR_R",
+      "U002:TME:D3_R"
+    ],
+    [
+      "U003:TME:D3_L",
+      "U003:TME:QFAR_L",
+      "U003:TME:D2_L",
+      "U003:TME:QNEAR_L",
+      "U003:TME:D1_L",
+      "U003:B",
+      "U003:TME:D1_R",
+      "U003:TME:QNEAR_R",
+      "U003:TME:D2_R",
+      "U003:TME:QFAR_R",
+      "U003:TME:D3_R"
+    ],
+    [
+      "U004:TME:D3_L",
+      "U004:TME:QFAR_L",
+      "U004:TME:D2_L",
+      "U004:TME:QNEAR_L",
+      "U004:TME:D1_L",
+      "U004:B",
+      "U004:TME:D1_R",
+      "U004:TME:QNEAR_R",
+      "U004:TME:D2_R",
+      "U004:TME:QFAR_R",
+      "U004:TME:D3_R"
+    ],
+    [
+      "U005:TME:D3_L",
+      "U005:TME:QFAR_L",
+      "U005:TME:D2_L",
+      "U005:TME:QNEAR_L",
+      "U005:TME:D1_L",
+      "U005:B",
+      "U005:TME:D1_R",
+      "U005:TME:QNEAR_R",
+      "U005:TME:D2_R",
+      "U005:TME:QFAR_R",
+      "U005:TME:D3_R"
+    ],
+    [
+      "U006:TME:D3_L",
+      "U006:TME:QFAR_L",
+      "U006:TME:D2_L",
+      "U006:TME:QNEAR_L",
+      "U006:TME:D1_L",
+      "U006:B",
+      "U006:TME:D1_R",
+      "U006:TME:QNEAR_R",
+      "U006:TME:D2_R",
+      "U006:TME:QFAR_R",
+      "U006:TME:D3_R"
+    ],
+    [
+      "U007:TME:D3_L",
+      "U007:TME:QFAR_L",
+      "U007:TME:D2_L",
+      "U007:TME:QNEAR_L",
+      "U007:TME:D1_L",
+      "U007:B",
+      "U007:TME:D1_R",
+      "U007:TME:QNEAR_R",
+      "U007:TME:D2_R",
+      "U007:TME:QFAR_R",
+      "U007:TME:D3_R"
+    ]
+  ],
+  "expected": {
+    "emittance_pm": 52.9562402016157,
+    "beta_max_m": 26.397192666414195,
+    "reference_pm_Jx1": 8.536481718596535,
+    "ring_tune_x": 0.21045237321799687,
+    "ring_tune_y": 0.13111322672441664
+  },
+  "canonical_sha256": {
+    "assembled_cell.json": "7c9847dc80bdf2d5cf947bd1e034ffee55c940cb38e81e33d09fed9b5e191491",
+    "hd3_cell.json": "e16dd2adcf20b7c2b314774d6c3e3eb0218977ca5453510fe8c1c990e77b858c",
+    "parent_cell.json": "31b95ee89af4f7b1e4161a81eb40ee6cb332d365db31a972e7d4ce8520b53699",
+    "unit_cell.json": "8a6cc98f32a5394b6ff6512928d96c795a30f7b5faf817209299a524550baf01"
+  }
+}

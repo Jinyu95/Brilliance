@@ -14,16 +14,26 @@ import logging
 import os
 import re
 import time
+import traceback
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence, TypedDict
 
+from .api_result_types import ScientificStage
 from .artifacts import json_safe
 from .atomic_io import atomic_write_text
 
-
 _log = logging.getLogger(__name__)
+
+
+class ProgressInputError(ValueError):
+    """A malformed presentation payload, never a numerical or physics failure."""
+
+
+_PROGRESS_KINDS = frozenset({"plan", "progress", "finding", "decision", "repair", "next"})
+_PROGRESS_KIND_ALIASES = {"activity": "progress", "milestone": "finding"}
 
 
 class OptimizationControls(TypedDict):
@@ -214,6 +224,102 @@ class ResearchRun:
         destination.parent.mkdir(parents=True, exist_ok=True)
         return destination
 
+    def checkpoint_candidate(self, candidate_lattice: Any, candidate_evaluation: Any, *,
+                             name: str = "candidate") -> dict[str, Any]:
+        """Persist the exact selected native evaluation before plot/table formatting.
+
+        Pass the original result returned by api.evaluate/evaluate_periodic_cell,
+        not a formatted summary. No matching or simulation is repeated. This is
+        provenance only; selection and scientific acceptance remain separate.
+        """
+        from .candidate_evidence import verify_candidate_evaluation
+        from .lattice import LatticeIR
+        from .numerical_checkpoints import write_numerical_checkpoint
+
+        candidate = (candidate_lattice if isinstance(candidate_lattice, LatticeIR)
+                     else LatticeIR.from_dict(candidate_lattice))
+        verified = verify_candidate_evaluation(candidate, candidate_evaluation, self.output_directory)
+        if not verified["passed"]:
+            raise ValueError("Cannot checkpoint an unverified candidate evaluation: " + "; ".join(verified["issues"]))
+        return write_numerical_checkpoint("candidate_evaluation", {
+            "name": str(name), "candidate_lattice": candidate.as_dict(),
+            "candidate_evaluation": verified["receipt"],
+        }, output_directory=self.output_directory)
+
+    @contextmanager
+    def reporting(self, *, checkpoint: Mapping[str, Any] | None = None):
+        """Optional formatting only, after numerical work has been checkpointed.
+
+        Put plots, table formatting and finish inside this block, not physics
+        calculations. A formatting exception publishes the exact saved numerical
+        checkpoint as partial and stops this program; no rematching, acceptance
+        or selection is invented. Physics rejection and cancellation propagate.
+        """
+        from .numerical_checkpoints import ReportingStopped, read_numerical_checkpoint
+        from .research_outcomes import ResearchInfeasible
+
+        saved = read_numerical_checkpoint(checkpoint, output_directory=self.output_directory)
+        try:
+            yield
+        except (ResearchInfeasible, ReportingStopped, InterruptedError):
+            raise
+        except Exception as exc:
+            # Explicit presentation scope, not a catch-all around scientific work.
+            diagnostic = {"type": type(exc).__name__, "message": str(exc), "traceback": traceback.format_exc()}
+            self._publish_checkpoint_after_reporting_failure(saved["descriptor"], diagnostic)
+            raise ReportingStopped(f"Optional reporting failed: {type(exc).__name__}: {exc}") from exc
+
+    def _publish_checkpoint_after_reporting_failure(self, checkpoint, diagnostic) -> None:
+        from .candidate_evidence import validate_saved_candidate_evaluation
+        from .numerical_checkpoints import read_numerical_checkpoint
+        from .scientific_acceptance import environment_acceptance_requirements
+        from .scientific_reporting import normalize_scientific_outcome
+
+        saved = read_numerical_checkpoint(checkpoint, output_directory=self.output_directory)
+        raw = saved["result"]
+        diagnostic_path = self.artifact_path("reporting_failure.json")
+        _write_json(diagnostic_path, diagnostic)
+        candidate_path = receipt = None
+        tables = []
+        data = {"numerical_checkpoint": saved["descriptor"], "reporting_failure": diagnostic}
+        if saved["kind"] == "candidate_evaluation":
+            receipt = raw["candidate_evaluation"]
+            verified = validate_saved_candidate_evaluation(raw["candidate_lattice"], receipt, self.output_directory)
+            if not verified["passed"]:
+                raise ValueError("Cannot recover altered numerical evidence: " + "; ".join(verified["issues"]))
+            candidate_path = "checkpoint_candidate_lattice.json"
+            _write_json(self.artifact_path(candidate_path), raw["candidate_lattice"])
+            tables.append(verified["table"])
+            data["verified_candidate_metrics"] = verified["canonical_metrics"]
+        elif saved["kind"] == "jutrack_line_match":
+            data["match"] = raw
+            tables.append({"title": "Saved JuTrack boundary residuals", "rows": raw.get("residuals", [])})
+        payload = {
+            "schema_version": "1.0", "status": "partial",
+            "summary": ("Numerical work was checkpointed, but optional reporting failed. "
+                        "The saved measurements are shown below; repair reporting without repeating matching or optimization."),
+            "data": data, "tables": tables, "plots": [],
+            "downloads": [{"path": saved["descriptor"]["path"], "title": "Exact numerical checkpoint"},
+                          {"path": "reporting_failure.json", "title": "Optional reporting diagnostic"}],
+            "methods": [], "limitations": [f"Reporting failure: {diagnostic['type']}: {diagnostic['message']}",
+                                              "No new scientific acceptance or working-candidate selection was made."],
+            "candidate_lattice": candidate_path, "candidate_evaluation": receipt,
+            "candidate_handoff": {"disposition": "archived_branch" if candidate_path else "no_candidate"},
+            "scientific_stage": {"outcome": "reporting_pending", "next_decision": "Repair presentation using the saved checkpoint."},
+            "scientific_passed": saved["checks_passed"], "request_satisfied": False,
+            "use_as_working_lattice": False,
+            "scientific_acceptance": {"required": list(environment_acceptance_requirements()), "reports": {}},
+            "completed_at": _now(),
+        }
+        payload = normalize_scientific_outcome(payload)
+        _write_json(self.result_file, payload)  # Mandatory; cannot be swallowed as a UI failure.
+        try:
+            self.progress("Numerical checkpoint preserved; reporting needs repair", kind="finding",
+                          event_key="result", detail=payload["summary"], tables=payload["tables"],
+                          scientific_role="milestone", **payload["scientific_stage"])
+        except Exception:
+            _log.exception("Optional checkpoint presentation failed; the partial result is already saved")
+
     def expert_asset(self, module_id: str, relative: str) -> Path:
         """Resolve one registered expert reference asset without repository discovery."""
 
@@ -287,7 +393,7 @@ class ResearchRun:
 
         def publish(update: Mapping[str, Any]) -> None:
             phase = str(update.get("phase", "optimization"))
-            preparing = phase in {"baseline_matching", "baseline_objective_validation"}
+            preparing = phase in {"budget", "baseline_matching", "baseline_objective_validation"}
             if not preparing and not started_marker.is_file():
                 _write_json(
                     started_marker,
@@ -317,7 +423,11 @@ class ResearchRun:
                 for key, value in best.items():
                     if isinstance(value, (int, float)):
                         metrics[f"best.{key}"] = value
-            if phase == "baseline_matching":
+            if phase == "budget":
+                stage = f"Optimization budget: {normalized}"
+                detail = str(update.get("summary", "Production search budget resolved."))
+                completed = total = None
+            elif phase == "baseline_matching":
                 stage = f"Checking baseline match: {normalized}"
                 detail = (f"Validating {update.get('matching_knobs', 0)} inner matching knobs "
                           f"before searching {update.get('outer_knobs', 0)} outer design knobs.")
@@ -345,9 +455,13 @@ class ResearchRun:
                 total = population
             elif phase == "generation":
                 stage = f"Generation {generation} complete: {normalized}"
+                feasible_count = update.get("feasible_count", 0)
+                front_size = update.get("front_size", 0)
                 detail = (
-                    f"Feasible candidates: {update.get('feasible_count', 0)}; "
-                    f"Pareto front: {update.get('front_size', 0)}."
+                    f"Feasible candidates: {feasible_count}; feasible Pareto front: {front_size}."
+                    if feasible_count else
+                    f"No feasible candidate yet; {front_size} non-dominated infeasible archive entries. "
+                    "These are rejected trials, not usable designs."
                 )
                 completed = generation
                 total = update.get("total_generations")
@@ -370,7 +484,9 @@ class ResearchRun:
                 completed=int(completed) if isinstance(completed, (int, float)) else None,
                 total=int(total) if isinstance(total, (int, float)) else None,
                 metrics=metrics,
-                event_key=f"optimization:{normalized}",
+                event_key=(f"optimization-budget:{normalized}" if phase == "budget"
+                           else f"optimization:{normalized}"),
+                kind="decision" if phase == "budget" else "progress",
             )
 
         return {
@@ -394,6 +510,15 @@ class ResearchRun:
         plots: Sequence[Mapping[str, Any] | str | Path] = (),
         kind: str = "progress",
         event_key: str | None = None,
+        stage_id: str | None = None,
+        hypothesis_id: str | None = None,
+        candidate_id: str | None = None,
+        parent_candidate_id: str | None = None,
+        candidate_lattice: Any | str | Path | None = None,
+        outcome: str | None = None,
+        scientific_role: str | None = None,
+        interpretation: str | None = None,
+        next_decision: str | None = None,
     ) -> None:
         """Publish live progress and retain one chat milestone per distinct stage.
 
@@ -404,22 +529,54 @@ class ResearchRun:
         Set ``event_key`` for a live activity whose display title changes (for
         example an optimizer generation counter). Its latest state updates one
         message; numerical campaign history remains in its checkpoint.
+        Use ``scientific_role='milestone'`` for a hypothesis, measured outcome,
+        comparison or decision. Operational counters belong to ``'activity'``.
+        ``kind`` selects the display category: plan, progress, finding, decision,
+        repair or next. ``kind='activity'`` aliases progress; ``'milestone'``
+        aliases finding. Unknown categories are published as neutral progress
+        with their requested label and a presentation warning retained. A display
+        category never certifies a scientific result or completes a request.
+        Malformed tables, plot references or explicit scientific roles raise
+        ``ProgressInputError``, a repairable reporting error, not infeasibility.
+        Optional stage and candidate identities link independent program attempts
+        without imposing a topic-specific workflow on the application.
+        Pass ``candidate_lattice`` to publish row-derived geometry without running
+        JuTrack. Targets belong in separately labelled contract fields, not measured
+        metrics. Conflicting structured geometry is retained for diagnosis but not
+        displayed as a result; geometry provenance alone never certifies optics.
         """
 
         if self.progress_file is None:
             return
+        requested_kind = str(kind).strip().lower() or "progress"
+        normalized_kind = _PROGRESS_KIND_ALIASES.get(requested_kind, requested_kind)
+        presentation_warnings = []
+        if normalized_kind not in _PROGRESS_KINDS:
+            normalized_kind = "progress"
+            presentation_warnings.append(
+                f"Unknown progress kind {requested_kind!r}; published as neutral progress."
+            )
+        role = str(scientific_role).strip().lower() if scientific_role else (
+            "milestone" if normalized_kind in {"plan", "finding", "decision", "next"} else "activity"
+        )
+        if role not in {"milestone", "activity"}:
+            raise ProgressInputError("scientific_role must be milestone or activity")
         normalized_tables: list[dict[str, Any]] = []
         for table in tables:
+            if not isinstance(table, Mapping):
+                raise ProgressInputError("each progress table must be a mapping with a rows list")
             row = dict(table)
             table_rows = row.get("rows", [])
             if not isinstance(table_rows, list):
-                raise ValueError("progress table must contain a rows list")
+                raise ProgressInputError("progress table must contain a rows list")
             if any(not isinstance(item, Mapping) for item in table_rows):
-                raise ValueError("every progress table row must be a mapping of column names")
+                raise ProgressInputError("every progress table row must be a mapping of column names")
             normalized_tables.append(row)
         normalized_plots: list[dict[str, Any]] = []
         artifact_root = (self.workspace / "artifacts").resolve()
         for plot in plots:
+            if not isinstance(plot, (str, Path, Mapping)):
+                raise ProgressInputError("each progress plot must be a path or a mapping with a path")
             row = {"path": str(plot)} if isinstance(plot, (str, Path)) else dict(plot)
             path = Path(str(row.get("path", "")))
             resolved = (
@@ -430,30 +587,71 @@ class ResearchRun:
             try:
                 relative = resolved.relative_to(artifact_root)
             except ValueError as exc:
-                raise ValueError(
+                raise ProgressInputError(
                     "progress plot must be stored below workspace/artifacts"
                 ) from exc
             if not resolved.is_file():
-                raise ValueError(f"progress plot does not exist: {path}")
+                raise ProgressInputError(f"progress plot does not exist: {path}")
             row["path"] = relative.as_posix()
             normalized_plots.append(row)
-        normalized_kind = str(kind).strip().lower() or "progress"
-        if normalized_kind not in {
-            "plan",
-            "progress",
-            "finding",
-            "decision",
-            "repair",
-            "next",
-        }:
-            raise ValueError(
-                "progress kind must be plan, progress, finding, decision, repair, or next"
-            )
+        geometry_report = geometry_comparison = None
+        submitted_report = None
+        if candidate_lattice is not None:
+            from .candidate_evidence import compare_declared_geometry, geometry_snapshot
+            from .lattice import LatticeIR
+
+            supplied = candidate_lattice
+            if isinstance(supplied, (str, Path)):
+                path = Path(supplied)
+                path = path.resolve() if path.is_absolute() else (self.output_directory / path).resolve()
+                try:
+                    path.relative_to(self.workspace.resolve())
+                except ValueError as exc:
+                    raise ProgressInputError("progress candidate must belong to this workspace") from exc
+                supplied = LatticeIR.from_dict(json.loads(path.read_text(encoding="utf-8")))
+            geometry_report = geometry_snapshot(supplied)
+            geometry_comparison = compare_declared_geometry(
+                dict(metrics or {}), geometry_report, tables=normalized_tables)
+            candidate_id = geometry_report["candidate_lattice_id"]
+            if not geometry_comparison["passed"] or geometry_comparison.get("unverified_claims"):
+                submitted_report = {"stage": str(stage), "detail": str(detail),
+                                    "metrics": dict(metrics or {}), "tables": normalized_tables}
+                stage = "Candidate geometry report needs correction"
+                detail = ("Reported dimensions conflict with the exact lattice rows or lack candidate identity. "
+                          "The row-derived geometry below is authoritative; the original report "
+                          "is preserved in this event for diagnosis. No simulation was rerun.")
+                metrics = {}
+                hidden = {item["table_index"] for item in geometry_comparison.get("unverified_claims", [])}
+                normalized_tables = ([table for index, table in enumerate(normalized_tables) if index not in hidden]
+                                     if geometry_comparison["passed"] else [])
+                outcome = "reporting_conflict"
+                interpretation = None
+                next_decision = geometry_comparison["next_action"]
+                presentation_warnings.append(detail)
+            normalized_tables.insert(0, geometry_report["table"])
+        else:
+            from .candidate_evidence import unbound_geometry_tables
+
+            unverified = unbound_geometry_tables(normalized_tables, candidate_id)
+            if unverified:
+                submitted_report = {"stage": str(stage), "detail": str(detail),
+                                    "metrics": dict(metrics or {}), "tables": normalized_tables}
+                hidden = {item["table_index"] for item in unverified}
+                normalized_tables = [table for index, table in enumerate(normalized_tables) if index not in hidden]
+                stage = "Candidate geometry evidence pending"
+                detail = ("A geometry table was supplied without exact candidate lineage. It is preserved "
+                          "in the event record, not presented as a measured machine dimension.")
+                next_decision = "Publish this milestone with candidate_lattice=the exact candidate; label targets separately."
+                geometry_comparison = {"passed": True, "conflicts": [], "unverified_claims": unverified,
+                                       "next_action": next_decision}
+                metrics = {}
+                outcome = "unverified_geometry"
+                interpretation = None
         updated_at = _now()
         stage_text = str(stage).strip() or "Research progress"
         event_identity = str(event_key).strip() if event_key is not None else stage_text
         if not event_identity:
-            raise ValueError("progress event_key must not be empty")
+            raise ProgressInputError("progress event_key must not be empty")
         event_slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", event_identity).strip("-.")[:80]
         event_digest = hashlib.sha256(event_identity.encode("utf-8")).hexdigest()[:12]
         event_id = f"research-program:{self.progress_file.stem}:{event_digest}"
@@ -479,6 +677,14 @@ class ResearchRun:
             "id": event_id,
             "event_key": event_identity,
             "kind": normalized_kind,
+            "scientific_role": role,
+            "stage_id": stage_id,
+            "hypothesis_id": hypothesis_id,
+            "candidate_id": candidate_id,
+            "parent_candidate_id": parent_candidate_id,
+            "outcome": outcome,
+            "interpretation": interpretation,
+            "next_decision": next_decision,
             "compute_job_id": self.compute_job_id,
             "timestamp": updated_at,
             "updated_at": updated_at,
@@ -490,6 +696,16 @@ class ResearchRun:
             "tables": normalized_tables,
             "plots": normalized_plots,
         }
+        if requested_kind != normalized_kind:
+            payload["requested_kind"] = requested_kind
+        if presentation_warnings:
+            payload["presentation_warnings"] = presentation_warnings
+        if geometry_report is not None:
+            payload["candidate_geometry"] = geometry_report
+        if geometry_comparison is not None:
+            payload["geometry_metric_comparison"] = geometry_comparison
+        if submitted_report is not None:
+            payload["submitted_report"] = submitted_report
         self._publish_progress(self.progress_file, payload)
         self._publish_progress(timeline_path, payload)
 
@@ -505,10 +721,12 @@ class ResearchRun:
         methods: Sequence[str] = (),
         limitations: Sequence[str] = (),
         candidate_lattice: Any | str | Path | None = None,
+        candidate_evaluation: Any | None = None,
         use_as_working_lattice: bool = False,
         scientific_passed: bool | None = None,
         request_satisfied: bool | None = None,
         acceptance: Mapping[str, Any] | None = None,
+        scientific_stage: ScientificStage | None = None,
     ) -> Path:
         """Commit the typed result consumed by Brilliance and its chat renderer.
 
@@ -516,14 +734,38 @@ class ResearchRun:
         ``request_satisfied`` separately states whether it answers the scientist's
         current request. An intermediate calculation can therefore be valid without
         prematurely ending the coding loop.
+        Status is completed, infeasible or partial; ``complete`` aliases completed
+        and ``intermediate`` aliases partial. These spelling aliases never waive
+        scientific acceptance. Partial results cannot complete the request.
         ``acceptance`` contains named numerical evidence reports for requested
         scientific properties; a failed expert check does not invalidate a useful
         calculation, but cannot satisfy that scientific request. Absent reports
         on intermediate results are presented as pending, not failed physics;
         they still prohibit completion and working-lattice promotion.
+        ``scientific_stage`` records topic-owned stage/hypothesis identities,
+        interpretation and next_decision for a coherent scientist-facing story.
+        ``candidate_evaluation`` is the exact high-level JuTrack evaluation of
+        the submitted final lattice. Its runtime-captured snapshot, not caller
+        labels, binds numerical claims to archived rows. An absent or mismatched
+        binding preserves an unverified branch and gives a concrete next action;
+        finish never reruns the simulation or optimizes implicitly.
+        An explicit optimization-evidence requirement applies only to a claim
+        that the request is complete. Exploratory probes remain valid results;
+        missing execution evidence leaves completion pending, not a runtime or
+        physics failure. No particular optimization algorithm is prescribed.
         """
 
-        normalized_status = str(status).strip().lower()
+        requested_status = str(status).strip().lower()
+        normalized_status = {"intermediate": "partial", "complete": "completed"}.get(
+            requested_status, requested_status)
+        if normalized_status == "partial":
+            request_satisfied = False
+        stage = dict(scientific_stage or {})
+        stage_fields = set(ScientificStage.__annotations__)
+        if stage.keys() - stage_fields:
+            raise ValueError("unknown scientific_stage fields: " + ", ".join(sorted(stage.keys() - stage_fields)))
+        if any(value is not None and not isinstance(value, str) for value in stage.values()):
+            raise TypeError("scientific_stage values must be strings or null")
         acceptance_claim_requested = request_satisfied is True or bool(use_as_working_lattice)
         if normalized_status not in {"completed", "infeasible", "partial"}:
             raise ValueError("status must be completed, infeasible, or partial")
@@ -538,15 +780,17 @@ class ResearchRun:
         ).strip().lower() in {"1", "true", "yes", "on"}
         optimizer_started = ((self.output_directory / "optimizer_evidence.json").is_file()
                              or numerical["optimization_started"])
-        declared_blocker = str(result_data.get("optimization_blocker", "")).strip()
-        if optimizer_required and not optimizer_started and not (
-            normalized_status == "infeasible" and declared_blocker
-        ):
-            raise RuntimeError(
-                "this explicit optimization request completed without optimizer progress; "
-                "call a population optimizer with **run.optimization_options(...) or return "
-                "status='infeasible' with data.optimization_blocker"
-            )
+        optimization_pending = optimizer_required and not optimizer_started and request_satisfied is True
+        if optimization_pending:
+            request_satisfied = False
+            if normalized_status == "completed":
+                normalized_status = "partial"
+            result_data["optimization_completion"] = {
+                "status": "pending",
+                "reason": "No numerical optimization execution evidence was recorded for this request.",
+                "next_action": "Continue the requested optimization or report why that work remains pending; "
+                               "retain the chosen algorithm's numerical execution evidence.",
+            }
         rendered_tables: list[dict[str, Any]] = []
         for table in tables:
             row = dict(table)
@@ -588,7 +832,13 @@ class ResearchRun:
                                   if item["path"] not in supplied_download_paths)
         lattice_value = None
         candidate = None
+        candidate_verification = None
         result_limitations = [str(item) for item in limitations]
+        if optimization_pending:
+            result_limitations.append(
+                "The calculation is preserved, but completion of the requested optimization "
+                "has not been demonstrated. A callback test or baseline evaluation is not an optimization."
+            )
         if any(item["has_accepted_progress"] for item in numerical["runs"]):
             result_limitations.append(
                 "Runtime numerical evidence retains verified intermediate candidates independently "
@@ -626,9 +876,76 @@ class ResearchRun:
                 raise ValueError("candidate lattice must be stored in the program output directory") from exc
             if candidate is None:
                 candidate = LatticeIR.from_dict(json.loads(resolved.read_text(encoding="utf-8")))
+            from .candidate_evidence import (
+                compare_declared_candidate_metrics,
+                compare_declared_geometry,
+                geometry_snapshot,
+                verify_candidate_evaluation,
+            )
+            geometry_report = geometry_snapshot(candidate)
+            geometry_comparison = compare_declared_geometry(result_data, geometry_report, tables=rendered_tables)
+            result_data["candidate_geometry"] = geometry_report
+            result_data["geometry_metric_comparison"] = geometry_comparison
+            if not geometry_comparison["passed"] or geometry_comparison.get("unverified_claims"):
+                result_data["submitted_presentation"] = {"summary": str(summary), "tables": rendered_tables}
+                hidden = {item["table_index"] for item in geometry_comparison.get("unverified_claims", [])}
+                rendered_tables = ([table for index, table in enumerate(rendered_tables) if index not in hidden]
+                                   if geometry_comparison["passed"] else [])
+                summary = ("Candidate preserved, but its reported geometry needs correction. "
+                           "The exact row-derived dimensions are shown below; no design completion is claimed.")
+                request_satisfied = use_as_working_lattice = False
+                if scientific_passed is True:
+                    scientific_passed = None
+                if normalized_status == "completed":
+                    normalized_status = "partial"
+                result_limitations.append(geometry_comparison["next_action"])
+            rendered_tables.insert(0, geometry_report["table"])
+            candidate_verification = verify_candidate_evaluation(
+                candidate, candidate_evaluation, self.output_directory,
+            )
+            result_data["candidate_verification"] = candidate_verification
+            if candidate_verification.get("passed"):
+                result_data["verified_candidate_metrics"] = candidate_verification.get("canonical_metrics", {})
+                if candidate_verification.get("table"):
+                    rendered_tables.insert(0, candidate_verification["table"])
+                descriptor = candidate_verification.get("receipt", {})
+                if descriptor.get("path"):
+                    rendered_downloads.append({"path": descriptor["path"],
+                                               "title": "Exact candidate and JuTrack verification"})
+                comparison = compare_declared_candidate_metrics(result_data, candidate_verification)
+                result_data["candidate_metric_comparison"] = comparison
+                if not comparison["passed"]:
+                    request_satisfied = False
+                    use_as_working_lattice = False
+                    if scientific_passed is True:
+                        scientific_passed = None
+                    if normalized_status == "completed":
+                        normalized_status = "partial"
+                    result_limitations.append(
+                        "The program's reported quantities differ from the exact archived candidate: "
+                        + ", ".join(item["metric"] for item in comparison["conflicts"])
+                        + ". The verified numerical table is authoritative."
+                    )
+                    result_limitations.append(comparison["next_action"])
+            else:
+                # This is missing/mismatched evidence, not a newly rejected
+                # physical design or an instruction to rerun the optimizer.
+                request_satisfied = False
+                use_as_working_lattice = False
+                if scientific_passed is True:
+                    scientific_passed = None
+                if normalized_status == "completed":
+                    normalized_status = "partial"
+                result_limitations.extend(candidate_verification.get("issues", []))
+                result_limitations.append(candidate_verification["next_action"])
             from .result_presentation import present_candidate_evidence
-            presentation = present_candidate_evidence(candidate, self.output_directory,
-                                                      tables=rendered_tables, plots=rendered_plots)
+            presentation = (present_candidate_evidence(candidate, self.output_directory,
+                tables=rendered_tables, plots=rendered_plots,
+                candidate_receipt=candidate_verification.get("receipt"))
+                if candidate_verification.get("passed") else {
+                    "status": "unavailable", "simulation_rerun": False,
+                    "reason": "Automatic presentation requires the exact selected candidate's verified receipt.",
+                })
             result_data["presentation"] = presentation
             if presentation.get("evidence"):
                 rendered_downloads.append({"path": presentation["evidence"],
@@ -663,6 +980,7 @@ class ResearchRun:
 
         acceptance_result = assess_scientific_acceptance(
             acceptance, required=environment_acceptance_requirements(), lattice=candidate,
+            evidence_directory=self.output_directory,
             registry=(load_expert_registry(project_directory=self.workspace.parent)
                       if acceptance or environment_acceptance_requirements() else None),
         )
@@ -705,14 +1023,29 @@ class ResearchRun:
             "pending_acceptance": pending_acceptance,
             "candidate_lattice": lattice_value,
             "candidate_handoff": candidate_handoff,
+            "candidate_evaluation": (
+                candidate_verification.get("receipt") if candidate_verification else None
+            ),
+            "scientific_stage": {**stage,
+                                 "candidate_id": candidate.lattice_id if candidate is not None else stage.get("candidate_id"),
+                                 "outcome": stage.get("outcome") or (
+                                     "infeasible" if normalized_status == "infeasible" or scientific_passed is False
+                                     else "partial" if normalized_status == "partial"
+                                     else candidate_handoff["disposition"] if candidate is not None
+                                     else "computed" if scientific_passed is True else "unverified")},
             "use_as_working_lattice": bool(use_as_working_lattice),
             "scientific_passed": scientific_passed,
             "request_satisfied": request_satisfied,
             "scientific_acceptance": acceptance_result,
             "completed_at": _now(),
         }
+        if requested_status in {"intermediate", "complete"}:
+            payload["requested_status"] = requested_status
         if not payload["summary"]:
             raise ValueError("research program summary must not be empty")
+        from .scientific_reporting import normalize_scientific_outcome
+
+        payload = normalize_scientific_outcome(payload)
         _write_json(self.result_file, payload)
         if self.progress_file is not None:
             headline = {
@@ -720,10 +1053,12 @@ class ResearchRun:
                 for key, value in result_data.items()
                 if isinstance(value, (str, int, float, bool)) and len(str(value)) <= 200
             }
-            self.progress("Scientific result ready", kind="finding", event_key="result",
+            headline_text = payload["outcome_presentation"]["heading"]
+            self.progress(headline_text, kind="finding", event_key="result",
                           detail=payload["summary"], completed=1, total=1,
                           metrics=dict(list(headline.items())[:12]),
-                          tables=rendered_tables, plots=rendered_plots)
+                          tables=payload["tables"], plots=rendered_plots,
+                          scientific_role="milestone", **payload["scientific_stage"])
         return self.result_file
 
 

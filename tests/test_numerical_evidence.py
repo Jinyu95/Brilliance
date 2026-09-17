@@ -1,7 +1,7 @@
 """Real runtime I/O and finish integration; no Julia or browser execution."""
-from copy import deepcopy
 import json
 import sys
+from copy import deepcopy
 from types import ModuleType
 
 import numpy as np
@@ -181,7 +181,10 @@ def test_local_optimizer_counts_as_execution_evidence(tmp_path, monkeypatch):
     monkeypatch.setenv('BRILLIANCE_REQUIRE_OPTIMIZER_EVIDENCE', '1')
     archive = create(run.output_directory)
     archive.snapshot(state(), candidate(), summary=summary())
-    assert run.finish(summary='Bounded SLSQP attempt').is_file()
+    result = json.loads(run.finish(summary='Bounded SLSQP attempt',
+                                  scientific_passed=True, request_satisfied=True).read_text())
+    assert result['request_satisfied'] is True
+    assert result['status'] == 'completed'
 
 
 def test_identity_only_does_not_fake_optimizer_execution(tmp_path, monkeypatch):
@@ -190,8 +193,41 @@ def test_identity_only_does_not_fake_optimizer_execution(tmp_path, monkeypatch):
     archive = create(run.output_directory)
     archive.snapshot({**state(), 'status': 'identity_passed'}, candidate(), summary={
         **summary(), 'has_accepted_progress': False, 'optimization_started': False})
-    with pytest.raises(RuntimeError, match='without optimizer progress'):
-        run.finish(summary='Identity only')
+    result = json.loads(run.finish(summary='Identity only', scientific_passed=True,
+                                  request_satisfied=True).read_text())
+    assert result['status'] == 'partial'
+    assert result['scientific_passed'] is True  # Missing work is not failed physics.
+    assert result['request_satisfied'] is False
+    assert result['data']['optimization_completion']['status'] == 'pending'
+    assert result['data']['numerical_evidence']  # Existing identity evidence survives.
+
+
+@pytest.mark.parametrize('status', ['partial', 'completed', 'infeasible'])
+def test_optimizer_requirement_does_not_reject_unfinished_probes(tmp_path, monkeypatch, status):
+    run = run_fixture(tmp_path, monkeypatch)
+    monkeypatch.setenv('BRILLIANCE_REQUIRE_OPTIMIZER_EVIDENCE', '1')
+    result = json.loads(run.finish(summary='Checked the objective callback before a search',
+                                  status=status, scientific_passed=True,
+                                  request_satisfied=False, use_as_working_lattice=False,
+                                  data={'callback_evaluation_count': 1},
+                                  tables=[{'title': 'Callback probe', 'rows': [{'value': 2.0}]}]).read_text())
+    assert result['status'] == status
+    assert result['request_satisfied'] is False
+    assert result['use_as_working_lattice'] is False
+    assert result['data']['callback_evaluation_count'] == 1
+    assert result['tables'][0]['rows'] == [{'value': 2.0}]
+    assert 'optimization_completion' not in result['data']
+
+
+def test_summary_cannot_replace_optimization_execution_evidence(tmp_path, monkeypatch):
+    run = run_fixture(tmp_path, monkeypatch)
+    monkeypatch.setenv('BRILLIANCE_REQUIRE_OPTIMIZER_EVIDENCE', '1')
+    result = json.loads(run.finish(summary='Optimization completed', scientific_passed=True,
+                                  request_satisfied=True,
+                                  data={'optimization_started': True, 'optimization_blocker': 'none'}).read_text())
+    assert result['status'] == 'partial'
+    assert result['request_satisfied'] is False
+    assert 'not an optimization' in result['limitations'][0]
 
 
 def test_default_live_progress_is_emitted_after_durable_snapshot(tmp_path):

@@ -21,6 +21,8 @@ from .artifacts import content_hash
 from .codex_backends import describe_codex_backend
 from .codex_runtime import (
     CodexRuntimeStore,
+    _resolve_completion_artifact,
+    _turn_attachments,
     configured_max_increments,
     research_progress,
     resolve_workspace_artifact,
@@ -870,6 +872,7 @@ class ResearchChatService:
                 )
 
         for index, message in enumerate(conversation):
+            message = _rehydrate_completion_message(self.root, project.id, message)
             messages.append(
                 self._message(
                     content_hash({"index": index, **dict(message)}, length=20),
@@ -898,7 +901,13 @@ class ResearchChatService:
             "repair": "Repair",
             "next": "Next",
         }
-        for update in workspace_research_updates(self.root, project.id, limit=40):
+        # Retain the scientific story from its contract onwards. Operational
+        # counters belong in one expandable log, not a rolling window which
+        # eventually removes the opening hypothesis and reference evidence.
+        updates, activity = _separate_research_updates(
+            workspace_research_updates(self.root, project.id, limit=None)
+        )
+        for update in updates:
             kind = str(update.get("kind", "finding"))
             label = update_labels.get(kind, "Research update")
             stage = str(update.get("stage", "Research update"))
@@ -924,6 +933,11 @@ class ResearchChatService:
                         "summary": detail,
                         "tables": [dict(item) for item in tables if isinstance(item, Mapping)],
                         "run_id": update.get("run_id"),
+                        "lattice_id": update.get("candidate_id"),
+                        "scientific_stage": {key: update[key] for key in (
+                            "stage_id", "hypothesis_id", "candidate_id", "parent_candidate_id",
+                            "outcome", "interpretation", "next_decision",
+                        ) if update.get(key) is not None},
                     }
                 )
             for plot in update.get("plots", []) if isinstance(update.get("plots"), list) else []:
@@ -957,10 +971,26 @@ class ResearchChatService:
                     "progress",
                     str(update.get("timestamp", project.updated_at)),
                     f"**{label} — {stage}**" + (f"\n\n{detail}" if detail else ""),
-                    meta={"runtime": "codex", "progress_kind": kind},
+                    meta={"runtime": "codex", "progress_kind": kind,
+                          **{key: update[key] for key in (
+                              "stage_id", "hypothesis_id", "candidate_id", "parent_candidate_id",
+                              "outcome", "scientific_role", "interpretation", "next_decision",
+                          ) if update.get(key) is not None}},
                     attachments=attachments,
                 )
             )
+        if activity:
+            messages.append(self._message(
+                project.id + ":calculation-activity", "assistant", "activity",
+                str(activity[-1].get("timestamp", project.updated_at)), "",
+                meta={"runtime": "codex", "scientific_role": "activity"},
+                attachments=[{"type": "activity", "title": "Calculation activity and runtime details",
+                              "rows": [{"title": item.get("stage"), "summary": item.get("detail"),
+                                        "status": item.get("outcome") or "recorded",
+                                        "run_id": item.get("run_id"),
+                                        "timestamp": item.get("timestamp")}
+                                       for item in activity]}],
+            ))
 
         if project.status == "complete":
             attachments: list[Mapping[str, Any]] = [
@@ -1893,6 +1923,98 @@ def _capability_plot(capability: str, project_id: str, revision: int) -> Mapping
         if selected
         else None
     )
+
+
+def _rehydrate_completion_message(
+    project_root: Path, project_id: str, message: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Repair the view of legacy final attachments, never saved chat or evidence.
+
+    The existing immutable completion proof is the sole source of authority;
+    neither file recency nor another project's candidate can select evidence.
+    """
+    meta = message.get("meta", {})
+    proof = meta.get("completion_evidence") if isinstance(meta, Mapping) else None
+    if (message.get("role") != "assistant" or not isinstance(proof, Mapping)
+            or not proof.get("evidence_run_id") or proof.get("execution_valid") is not True
+            or proof.get("scientific_passed") is not True):
+        return message
+    old_attachments = message.get("attachments", [])
+    if any(isinstance(item, Mapping) and item.get("presentation_role") == "selected_evidence"
+           for item in old_attachments):
+        return message
+    artifact_root = (Path(project_root).resolve() / project_id / "workspace" / "artifacts").resolve()
+    signature: tuple[Any, ...] = ()
+    try:
+        source = _resolve_completion_artifact(artifact_root, str(proof.get("evidence_full_result") or ""))
+        if source.name == "result.json" and source.is_file():
+            # Stat only the one cited receipt directory; hashing and decoding
+            # are cached. Long project histories do not cause quadratic scans.
+            signatures = []
+            for path in sorted(source.parent.rglob("*")):
+                path.resolve().relative_to(artifact_root)
+                if path.is_file():
+                    stat = path.stat()
+                    signatures.append((str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+            signature = tuple(signatures)
+    except (OSError, ValueError):
+        pass
+    attachments = json.loads(_cached_completion_attachments(
+        str(Path(project_root).resolve()), project_id,
+        json.dumps(dict(proof), sort_keys=True, ensure_ascii=False), signature,
+    ))
+    alternatives = []
+    for item in old_attachments:
+        if (isinstance(item, Mapping) and item.get("type") == "evidence_summary"
+                and item.get("run_id") != proof["evidence_run_id"]):
+            alternatives.append({"run_id": item.get("run_id"), "summary": item.get("summary", ""),
+                                 "status": item.get("status"), "disposition": "not_selected_for_this_answer"})
+    figures = sum(item.get("type") == "image" for item in attachments)
+    for item in attachments:
+        if item.get("presentation_role") == "selected_evidence" and item.get("type") == "evidence_summary":
+            item["history_rehydrated"] = (
+                f"Showing the exact calculation cited by this saved answer ({figures} figures). "
+                "The original message and research files have not been changed."
+            )
+    if alternatives:
+        attachments.append({"type": "alternative_results",
+                            "title": "Earlier attached calculations — not selected for this answer",
+                            "rows": alternatives})
+    return {**dict(message), "attachments": attachments,
+            "meta": {**dict(meta), "evidence_rehydrated": True}}
+
+
+@lru_cache(maxsize=128)
+def _cached_completion_attachments(
+    project_root: str, project_id: str, proof_json: str, signature: tuple[Any, ...],
+) -> str:
+    del signature  # Cache invalidates when any file in the cited receipt changes.
+    attachments = _turn_attachments(
+        Path(project_root), project_id, 0, completion_evidence=json.loads(proof_json),
+        include_recent_results=False,
+    )
+    return json.dumps(attachments, ensure_ascii=False)
+
+
+def _separate_research_updates(
+    updates: list[Mapping[str, Any]],
+) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    """Separate scientific evidence from operational updates without erasing either.
+
+    Topic modules supply explicit roles. Legacy findings, decisions, repairs,
+    plans and progress containing scientific artifacts remain in the chat;
+    runtime starts and plain counters are available in the activity log.
+    """
+    milestones: list[Mapping[str, Any]] = []
+    activity: list[Mapping[str, Any]] = []
+    for update in updates:
+        role = update.get("scientific_role")
+        operational = role == "activity" or (
+            role != "milestone" and update.get("kind", "progress") == "progress"
+            and not update.get("tables") and not update.get("plots")
+        )
+        (activity if operational else milestones).append(update)
+    return milestones, activity
 
 
 def _message_priority(kind: str) -> int:

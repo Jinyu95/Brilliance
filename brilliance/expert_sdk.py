@@ -150,7 +150,7 @@ def validator(
 
 
 def python_tool(
-    *, legacy_names: tuple[str, ...] = (),
+    *, legacy_names: tuple[str, ...] = (), discoverable: bool = True, durable: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Export an ordinary Python function in this expert's in-process library.
 
@@ -158,9 +158,17 @@ def python_tool(
     This is suitable for optimizer callbacks, arrays, and numerical objects. The
     optional legacy aliases keep archived programs callable while a module is
     installed; new programs should use ``api.expert_module(module_id).function``.
+    Set ``discoverable=False`` for compatibility-only implementations: explicit
+    calls still work, but broad catalogs do not recommend them for new research.
+    ``durable=True`` marks a potentially long numerical operation for managed
+    background execution, without imposing a population optimizer or topic.
     """
 
     def decorate(function: Callable[..., Any]) -> Callable[..., Any]:
+        if not isinstance(discoverable, bool):
+            raise TypeError("discoverable must be a boolean")
+        if not isinstance(durable, bool):
+            raise TypeError("durable must be a boolean")
         if not callable(function) or inspect.iscoroutinefunction(function):
             raise TypeError("expert Python tools must be synchronous callables")
         aliases = tuple(str(item).strip() for item in legacy_names)
@@ -170,6 +178,8 @@ def python_tool(
             raise ValueError("duplicate legacy Python tool names")
         function.__brilliance_python_tool__ = {  # type: ignore[attr-defined]
             "legacy_names": aliases,
+            "discoverable": discoverable,
+            "durable": durable,
         }
         return function
 

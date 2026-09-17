@@ -448,6 +448,16 @@ def ensure_codex_workspace(
         workspace / "ACCELERATOR_API_REFERENCE.md",
         api_reference.read_text(encoding="utf-8"),
     )
+    from .local_jutrack_help import render_reference
+    try:
+        native_reference = render_reference(runtime.pyjutrack_module)
+    except (OSError, UnicodeError, SyntaxError, ValueError) as exc:
+        native_reference = (
+            "# Configured native JuTrack reference unavailable\n\n"
+            f"Source parsing failed: {type(exc).__name__}. The application must repair "
+            "its configured reference. Do not discover another runtime or guess schemas.\n"
+        )
+    _write_generated_text(workspace / "JUTRACK_API_REFERENCE.md", native_reference)
     query = "\n".join(item for item in (project.goal.strip(), research_query.strip()) if item)
     expert_assets = _stage_expert_reference_assets(registry, workspace, query=query)
     _write_generated_text(
@@ -546,22 +556,24 @@ def workspace_artifacts(
     for path in sorted(directory.rglob("*")):
         if not path.is_file() or path.stat().st_mtime < modified_after:
             continue
-        relative = path.relative_to(directory).as_posix()
-        records.append(
-            {
-                "path": relative,
-                "title": _workspace_artifact_title(relative),
-                "media_type": _workspace_artifact_media_type(path),
-                "size": path.stat().st_size,
-                "content_sha256": _workspace_artifact_digest(path),
-                "modified_at": path.stat().st_mtime,
-                "url": (
-                    f"/api/projects/{quote(project_id, safe='')}/workspace-artifacts/"
-                    + quote(relative, safe="/")
-                ),
-            }
-        )
+        records.append(_workspace_artifact_record(path, directory, project_id))
     return records
+
+
+def _workspace_artifact_record(path: Path, directory: Path, project_id: str) -> dict[str, Any]:
+    relative = path.relative_to(directory).as_posix()
+    return {
+        "path": relative,
+        "title": _workspace_artifact_title(relative),
+        "media_type": _workspace_artifact_media_type(path),
+        "size": path.stat().st_size,
+        "content_sha256": _workspace_artifact_digest(path),
+        "modified_at": path.stat().st_mtime,
+        "url": (
+            f"/api/projects/{quote(project_id, safe='')}/workspace-artifacts/"
+            + quote(relative, safe="/")
+        ),
+    }
 
 
 def resolve_workspace_artifact(
@@ -582,7 +594,7 @@ def workspace_research_updates(
     project_root: Path | str,
     project_id: str,
     *,
-    limit: int = 12,
+    limit: int | None = 12,
     modified_after: float = 0.0,
 ) -> list[dict[str, Any]]:
     directory = Path(project_root).resolve() / project_id / "workspace" / "progress"
@@ -630,12 +642,16 @@ def workspace_research_updates(
             "plots": value.get("plots", []),
             "compute_job_id": value.get("compute_job_id"),
             "run_id": path.parent.name if path.parent.parent.name == "events" else path.stem,
+            **{key: value[key] for key in (
+                "stage_id", "hypothesis_id", "candidate_id", "parent_candidate_id",
+                "outcome", "scientific_role", "interpretation", "next_decision",
+            ) if value.get(key) is not None},
         }
         previous = by_id.get(event_id)
         if previous is None or update["timestamp"] >= previous["timestamp"]:
             by_id[event_id] = update
     updates = sorted(by_id.values(), key=lambda item: (item["timestamp"], item["id"]))
-    return updates[-max(1, int(limit)) :]
+    return updates if limit is None else updates[-max(1, int(limit)) :]
 
 
 def run_codex_turn(
@@ -1009,7 +1025,9 @@ async def _run_provider_native_stage(
             disposition="needs_input",
         )
 
-    attachments = _turn_attachments(root, project.id, started_at)
+    attachments = _turn_attachments(
+        root, project.id, started_at, completion_evidence=result.completion_evidence,
+    )
     saved_result = _presentable_result_narrative(attachments)
     response = result.response.strip() or saved_result
     if not response:
@@ -1030,13 +1048,12 @@ async def _run_provider_native_stage(
               "protocol_failure": ({key: protocol_failure[key] for key in
                   ("type", "reason", "attempts", "can_retry") if key in protocol_failure}
                   if protocol_failure else None)})
-    from .research_recovery import coding_failure_summary
-
     recovery = None
-    if result.failed_program and coding_failure_summary(result.last_error):
+    if result.failed_program and result.last_error:
         failure = project_directory / "workspace" / "runtime_failures" / (
             "job-native-" + content_hash((started_at, result.failed_program, result.last_error)) + ".json")
-        recovery = {"script": result.failed_program, "error": result.last_error, "diagnostic": str(failure)}
+        recovery = {"script": result.failed_program, "error": result.last_error,
+                    "diagnostic": str(failure), "mode": "diagnose_and_repair"}
         _write_generated_text(failure, json.dumps({"kind": "native_step_boundary", **recovery}, ensure_ascii=False))
     status = ("complete" if result.request_satisfied or result.managed_job_id
               else "checkpoint" if result.continuation_needed or recovery else "paused")
@@ -1773,7 +1790,7 @@ def _record_notification(
                             ),
                             "instruction": (
                                 "The local MCP writer was rejected by the runtime approval layer. "
-                                "Do not call it again and do not reread documentation. Use the "
+                                "Do not repeat that rejected transport operation. Use the "
                                 "native apply_patch file-edit operation to create the already "
                                 "drafted program and run JSON under workspace/programs, then run "
                                 "check-program and execute the stage."
@@ -2025,7 +2042,8 @@ def _command_operational_failure(item: Mapping[str, Any]) -> dict[str, Any] | No
         }
     if "run-expert-tool" not in command:
         return None
-    repairable = "accelerator.run_research_program" in command
+    repairable = any(name in command for name in (
+        "accelerator.run_research_program", "accelerator.run_long_research_program"))
     return {
         "kind": "operational_abort",
         "fatal": not repairable,
@@ -2056,19 +2074,8 @@ def _failure_summary(output: str) -> str:
     structured = _structured_command_summary(output)
     if structured:
         return structured
-    lines = [" ".join(line.split()) for line in str(output).splitlines() if line.strip()]
-    if not lines:
-        return "The command exited without an error message."
-    candidates = [
-        line
-        for line in lines
-        if re.search(
-            r"(?:Error|Exception|Traceback|failed|not found|timed out|unsupported|no module|cannot)",
-            line,
-            re.IGNORECASE,
-        )
-    ]
-    return _concise_narrative(candidates[-1] if candidates else lines[-1], limit=360)
+    from .failure_diagnostics import execution_failure_summary
+    return _concise_narrative(execution_failure_summary(output), limit=360)
 
 
 def _result_summary(output: str) -> str:
@@ -2519,15 +2526,84 @@ def _workspace_artifact_title(relative_path: str) -> str:
     return " ".join(stem.split()).title() or "Research artifact"
 
 
+def _resolve_completion_artifact(artifact_root: Path, reference: str) -> Path:
+    """Resolve typed receipt paths without borrowing another project's files."""
+    if not reference:
+        raise ValueError("completion receipt has no artifact path")
+    path = Path(reference)
+    if not path.is_absolute():
+        first = path.parts[0] if path.parts else ""
+        if first == "workspace":
+            path = artifact_root.parent.parent / path
+        elif first == "artifacts":
+            path = artifact_root.parent / path
+        else:
+            path = artifact_root / path
+    path = path.resolve()
+    path.relative_to(artifact_root.resolve())
+    return path
+
+
 def _turn_attachments(
-    project_root: Path, project_id: str, started_at: float
+    project_root: Path, project_id: str, started_at: float, *,
+    completion_evidence: Mapping[str, Any] | None = None,
+    include_recent_results: bool = True,
 ) -> list[dict[str, Any]]:
-    records = workspace_artifacts(project_root, project_id, modified_after=started_at - 1.0)
+    records = (workspace_artifacts(project_root, project_id, modified_after=started_at - 1.0)
+               if include_recent_results else [])
+    alternatives: list[dict[str, Any]] = []
+    selected_result: str | None = None
+    if completion_evidence:
+        # Completion can deliberately cite an older, better candidate. File
+        # recency must not substitute a later rejected branch for that receipt.
+        artifact_root = (project_root / project_id / "workspace" / "artifacts").resolve()
+        try:
+            raw = str(completion_evidence.get("evidence_full_result") or "")
+            evidence_path = _resolve_completion_artifact(artifact_root, raw)
+            selected_result = evidence_path.relative_to(artifact_root).as_posix()
+            if (evidence_path.name != "result.json" or not evidence_path.is_file()
+                    or evidence_path.parent.name != completion_evidence.get("evidence_run_id")):
+                raise ValueError("completion result and run identity disagree")
+            selected_value = json.loads(evidence_path.read_text(encoding="utf-8"))
+            selected_candidate = selected_value.get("candidate_lattice")
+            proof_candidate = completion_evidence.get("evidence_candidate_lattice")
+            if proof_candidate:
+                candidate_path = (evidence_path.parent / str(selected_candidate or "")).resolve()
+                proof_path = _resolve_completion_artifact(artifact_root, str(proof_candidate))
+                candidate_path.relative_to(evidence_path.parent)
+                if candidate_path != proof_path.resolve() or not candidate_path.is_file():
+                    raise ValueError("completion candidate does not match its result")
+            for record in records:
+                if Path(record["path"]).name != "result.json" or record["path"] == selected_result:
+                    continue
+                try:
+                    branch = json.loads(resolve_workspace_artifact(
+                        project_root, project_id, record["path"]).read_text(encoding="utf-8"))
+                except (OSError, ValueError, LookupError):
+                    continue
+                if isinstance(branch, Mapping) and branch.get("summary"):
+                    alternatives.append({
+                        "run_id": Path(record["path"]).parent.name,
+                        "summary": str(branch["summary"]),
+                        "status": branch.get("status"),
+                        "disposition": "not_selected_for_this_answer",
+                    })
+            records = [_workspace_artifact_record(path, artifact_root, project_id)
+                       for path in sorted(evidence_path.parent.rglob("*")) if path.is_file()]
+        except (OSError, ValueError, TypeError, AttributeError):
+            # Never disguise a broken evidence link with an unrelated result.
+            return [{"type": "evidence_summary", "title": "Selected evidence unavailable",
+                     "summary": "The answer's exact calculation receipt could not be resolved. "
+                                "No newer candidate was substituted; saved research is unchanged.",
+                     "run_id": completion_evidence.get("evidence_run_id"),
+                     "presentation_role": "selected_evidence_unavailable", "tables": []}]
     attachments: list[dict[str, Any]] = []
     declared: dict[str, dict[str, Any]] = {}
     seen_hashes: set[str] = set()
+    presentation_lattice_id: str | None = None
 
-    def declare(base: Path, item: Any, *, kind: str, default_title: str) -> None:
+    def declare(base: Path, item: Any, *, kind: str, default_title: str,
+                artifact_role: str | None = None) -> None:
         if isinstance(item, (str, Path)):
             row = {"path": str(item)}
         elif isinstance(item, Mapping):
@@ -2542,12 +2618,17 @@ def _turn_attachments(
         declared[relative] = {
             "type": kind,
             "title": str(row.get("title") or default_title),
+            "lattice_id": row.get("lattice_id") or presentation_lattice_id,
+            "presentation_role": "selected_evidence" if selected_result else "calculation_result",
+            "artifact_role": artifact_role,
         }
 
     # A typed result is the presentation contract. Tables are rendered directly;
     # only plots and downloads named by that result are exposed as attachments.
     for record in records:
         if Path(record["path"]).name != "result.json":
+            continue
+        if selected_result and record["path"] != selected_result:
             continue
         try:
             value = json.loads(
@@ -2560,10 +2641,29 @@ def _turn_attachments(
         if isinstance(value, Mapping) and (value.get("tables") or value.get("summary")):
             tables = value.get("tables", []) if isinstance(value.get("tables"), list) else []
             data = value.get("data", {}) if isinstance(value.get("data"), Mapping) else {}
+            lattice_id = None if value.get("candidate_lattice") else data.get("lattice_id")
+            if value.get("candidate_lattice"):
+                try:
+                    lattice_record = json.loads(resolve_workspace_artifact(
+                        project_root, project_id,
+                        (Path(record["path"]).parent / value["candidate_lattice"]).as_posix(),
+                    ).read_text(encoding="utf-8"))
+                    lattice_id = lattice_record.get("lattice_id")
+                except (OSError, ValueError, LookupError, AttributeError):
+                    pass
+            presentation_lattice_id = lattice_id
+            verified_metrics = (data.get("verified_candidate_metrics", {})
+                                if any(isinstance(table, Mapping) and table.get("kind") == "candidate_evaluation"
+                                       for table in tables) else {})
+            if not isinstance(verified_metrics, Mapping):
+                verified_metrics = {}
             scalar_rows = [
                 {"quantity": str(key), "value": item}
                 for key, item in data.items()
-                if isinstance(item, (str, int, float, bool)) and len(str(item)) <= 200
+                if isinstance(item, (int, float)) and not isinstance(item, bool)
+                and key not in verified_metrics and key not in {
+                    "declared_mirror_mismatch_count", "execution_count", "returncode",
+                }
             ]
             # Curated tables (e.g. bend inventory) do not replace independent
             # scalar findings (e.g. chromaticities). Omit only exact key/value
@@ -2579,7 +2679,7 @@ def _turn_attachments(
                 )
 
             remaining = [row for row in scalar_rows if not already_tabulated(row)]
-            rendered_tables = ([{"title": "Computed quantities", "rows": remaining[:30]}]
+            rendered_tables = ([{"title": "Computed quantities", "kind": "automatic_quantities", "rows": remaining[:30]}]
                                if remaining else []) + tables
             attachments.append(
                 {
@@ -2594,7 +2694,13 @@ def _turn_attachments(
                     "scientific_passed": value.get("scientific_passed"),
                     "request_satisfied": value.get("request_satisfied"),
                     "candidate_lattice": value.get("candidate_lattice"),
-                    "lattice_id": data.get("lattice_id"),
+                    "lattice_id": lattice_id,
+                    "candidate_handoff": value.get("candidate_handoff", {}),
+                    "working_lattice_action": (completion_evidence.get("working_lattice_action")
+                                               if selected_result and completion_evidence else None),
+                    "scientific_stage": value.get("scientific_stage", {}),
+                    "outcome_presentation": value.get("outcome_presentation", {}),
+                    "presentation_role": "selected_evidence" if selected_result else "calculation_result",
                     "run_id": Path(str(record["path"])).parent.name,
                     "result_path": str(record["path"]),
                 }
@@ -2608,6 +2714,7 @@ def _turn_attachments(
                     value["candidate_lattice"],
                     kind="download",
                     default_title="Candidate lattice definition",
+                    artifact_role="candidate_definition",
                 )
             for download in (
                 value.get("downloads", []) if isinstance(value.get("downloads"), list) else []
@@ -2632,18 +2739,24 @@ def _turn_attachments(
     # A program interrupted before finish may still have produced a useful
     # figure. Show a small number inline, but never expose raw stdout, stderr,
     # source, arguments, or runner JSON as the primary answer.
-    if not any(item.get("type") == "image" for item in attachments):
+    if not any(item.get("type") == "evidence_summary" for item in attachments):
         for record in undeclared_images[-4:]:
             digest = str(record.get("content_sha256", ""))
             if not digest or digest not in seen_hashes:
-                attachments.append(record)
+                attachments.append({**record, "presentation_role": "unverified_artifact",
+                                    "title": str(record.get("title", "Figure")) + " — unverified output"})
                 if digest:
                     seen_hashes.add(digest)
 
-    images = [item for item in attachments if item.get("type") == "image"][-8:]
-    summaries = [item for item in attachments if item.get("type") == "evidence_summary"][-4:]
-    downloads = [item for item in attachments if item.get("type") == "download"][-4:]
-    return [*summaries, *images, *downloads]
+    images = [item for item in attachments if item.get("type") == "image"]
+    summaries = [item for item in attachments if item.get("type") == "evidence_summary"]
+    downloads = [item for item in attachments if item.get("type") == "download"]
+    if not selected_result:
+        images, summaries, downloads = images[-8:], summaries[-4:], downloads[-4:]
+    downloads.sort(key=lambda item: item.get("artifact_role") != "candidate_definition")
+    comparison = [{"type": "alternative_results", "title": "Other calculations — not selected for this answer",
+                   "rows": alternatives}] if alternatives else []
+    return [*summaries, *images, *downloads, *comparison]
 
 
 def _presentable_result_narrative(attachments: list[Mapping[str, Any]]) -> str:
@@ -2768,6 +2881,7 @@ def _developer_instructions(
     research_mode: str = "research",
     query: str = "",
 ) -> str:
+    from .coding_policy import SCIENTIFIC_CODING_POLICY
     from .experts import ExpertRegistry
 
     command = _project_command(project, project_root, environment)
@@ -2790,24 +2904,30 @@ def _developer_instructions(
         if environment.internet_access
         else "Internet research is disabled. Do not search, browse, download, or call remote MCP."
     )
-    return f"""You are Brilliance, a general accelerator-physics coding agent. The newest scientist
+    return SCIENTIFIC_CODING_POLICY + f"""
+You are Brilliance, a general accelerator-physics coding agent. The newest scientist
 message is the immediate task. JuTrack is the sole numerical beam-dynamics authority.
 
 Configured runtime (already verified): Python `{environment.python_executable}`; JuTrack
 `{environment.jutrack_root}`; public API `brilliance.accelerator_api`. Never search for runtimes,
-inspect implementation source, install packages, browse sibling projects, or replace JuTrack with
+install packages, browse sibling projects, or replace JuTrack with
 hand calculations.
 
-EXECUTE BEFORE ELABORATING. For new computational work, immediately call the pre-approved local
-tool `brilliance_workspace.write_research_program` and save one bounded Python stage under
-`workspace/programs/`; do not first narrate, browse files, read a handbook, or mentally author the
-whole campaign. Then call `write_research_arguments`, run `{command} check-program
-programs/NAME.py`, and execute it with `accelerator.run_research_program`. Use
+Inspect the exact saved inputs and focused contracts needed for the requested calculation.
+`workspace/ACCELERATOR_API_REFERENCE.md` documents public helpers;
+`workspace/JUTRACK_API_REFERENCE.md` contains read-only signatures, documentation and static
+return information from the configured Python wrapper, without loading Julia. Read relevant
+sections before writing code; no environment rediscovery is needed.
+Use `brilliance_workspace.write_research_program` to save a short Python experiment under
+`workspace/programs/`, save arguments with `write_research_arguments`, run `{command} check-program
+programs/NAME.py`, then execute the actual small calculation with `accelerator.run_research_program`. Use
 `accelerator.run_long_research_program` only for an hours-or-days job and never poll it. Source must
 use `brilliance.research_api.open_research_run` and `brilliance.accelerator_api`. A first program is
 normally under 250 lines and produces one meaningful JuTrack result, not a schema or environment
-probe. If repair is needed, inspect only the relevant saved source/API section and make at most two
-bounded repairs. Never transport code through PowerShell, stdin, base64, or redirection.
+probe. A representative evaluation of the real custom residual/objective is useful evidence.
+If repair is needed, inspect the relevant saved source/API section and repair that layer;
+do not repeat an unchanged failed attempt. Never transport code through PowerShell, stdin,
+base64, or redirection.
 
 The saved program owns task-specific data, matching, optimization, plots, and limitations. Use
 exact conserved length/angle constraints; evaluate one cell in inner loops; never match an
@@ -2822,9 +2942,10 @@ clear text and current tables/plots; `run.finish` must explain Result, Evidence,
 Next. Files are secondary reproducibility material. Missing a target is valid negative evidence;
 an API exception is not a scientific result.
 
-Select the applicable installed route below. Treat it as provisional when marked draft, preserve
-pending comparisons across bounded stages, and switch routes only from numerical evidence.
-Historical examples are seed context, not results to reproduce. End with exactly one private
+Select a fitting installed capability or author a justified method from the physics requirements.
+Treat draft expertise as provisional, preserve pending comparisons and use numerical evidence
+to choose the next change. Historical results from other projects are not permitted design seeds.
+End with exactly one private
 `brilliance-research-status` marker: `complete`, `continue`, or `needs_input`.
 
 Mode: {research_mode}. {network}
@@ -2845,11 +2966,11 @@ def _turn_prompt(
     research_mode: str = "research",
 ) -> str:
     prefix = (
-        "Do not spend tokens planning in prose. Call brilliance_workspace.write_research_program "
-        "now for the smallest valid route stage, "
-        "followed by write_research_arguments, check-program, and execution. Do not call a shell, "
-        "bootstrap, inspect files, or read documentation before that source exists. Produce one "
-        "scientifically meaningful JuTrack result; initialization and schema checks are not milestones."
+        "Inspect the necessary current-project inputs and focused API/method contract, then "
+        "save a short scientific program with brilliance_workspace.write_research_program. "
+        "Use write_research_arguments, check-program and execution to test the actual calculation "
+        "or callback before a larger run. Reuse an installed method when it fits; otherwise "
+        "write task-specific scientific Python. Do not bootstrap or discover a runtime."
         if initial
         else "Continue from saved code, evidence, and contracts without replaying completed work."
     )
@@ -2876,6 +2997,7 @@ def _requires_jutrack_execution(
 def _workspace_agents_md(
     project: ResearchProject, project_root: Path, environment: ResearchEnvironment
 ) -> str:
+    from .coding_policy import SCIENTIFIC_CODING_POLICY
     command = _project_command(project, project_root, environment)
     return f"""<!-- brilliance-managed: accelerator-agent-v{ACCELERATOR_AGENT_PROFILE_VERSION} -->
 # Brilliance accelerator-research workspace
@@ -2889,10 +3011,12 @@ Configured JuTrack: `{environment.jutrack_root}`
 Public API: `brilliance.accelerator_api`  
 Project command: `{command}`
 
-The runtime is prepared. Never rediscover Python/Julia/JuTrack, install packages, inspect JuTrack
-source, or read sibling projects. JuTrack is the numerical authority. For new work, first save a
-bounded program with `brilliance_workspace.write_research_program`, then save JSON arguments with
-`write_research_arguments`.
+{SCIENTIFIC_CODING_POLICY}
+
+The runtime is prepared. Read the required local API/method reference and exact current-project
+inputs, then save a bounded program with `brilliance_workspace.write_research_program` and JSON
+arguments with `write_research_arguments`. The generated `workspace/JUTRACK_API_REFERENCE.md`
+describes the configured native wrapper without importing Julia.
 
 ```powershell
 {command} check-program programs/NAME.py
@@ -2901,9 +3025,9 @@ bounded program with `brilliance_workspace.write_research_program`, then save JS
 
 Programs use `open_research_run()` plus `brilliance.accelerator_api`, publish useful
 `run.progress(...)` messages with tables/plots, and finish with a scientist-readable result. Use
-the long-program tool for durable optimization. Do not put source in shell commands, probe API
-schemas, or treat files as the user-facing answer. Exact API signatures are in
-`workspace/ACCELERATOR_API_REFERENCE.md` if a saved program needs one bounded repair.
+the long-program tool for durable optimization. Do not put source in shell commands or treat
+files as the user-facing answer. Exact public API signatures are in
+`workspace/ACCELERATOR_API_REFERENCE.md`; reading them before a new calculation is encouraged.
 
 """
 

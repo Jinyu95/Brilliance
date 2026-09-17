@@ -26,7 +26,9 @@ status: draft
 ---
 ```
 
-Then write the scientific content under these headings:
+Keep the entry point short: explain when the module applies, which method to read,
+and the few scientific boundaries that govern every route. Use the following
+topics as a checklist, not seven mandatory sections to fill:
 
 - `Applicability`: systems, regimes, approximations, and exclusions.
 - `Required inputs`: quantities, units, defaults that are acceptable, and choices that must come
@@ -44,6 +46,15 @@ Describe physical reasoning, not an ordered software pipeline. For example, expl
 response singular spectrum means and when regularization is justified; do not require the agent to
 call `measure -> invert -> correct -> plot` in one fixed sequence. The scientist's newest request
 and computed evidence determine what happens next.
+
+Keep one canonical reference per supported method under `references/`, containing
+its practical physics, exact tool contract and evidence requirements. Link to that
+reference instead of repeating the recipe in `EXPERT.md`, acceptance instructions
+and several troubleshooting notes. Every file under `references/` is discoverable
+by the agent: remove superseded guides rather than leave contradictory versions
+there. Put developer validation/history in `docs/`, not active expert knowledge.
+Do not replace essential construction details with vague principles just to shorten
+the text. No extra manifest or manually maintained reference index is needed.
 
 Run the local check:
 
@@ -96,6 +107,18 @@ There are two interfaces, with different purposes:
 
 Both are discovered from `tools.py`; no manifest, hand-written schema, core API edit, or adapter is
 required. Neither decorator decides which research route the agent must follow.
+
+Use `@python_tool(durable=True)` for a potentially long numerical operation.
+Its calling program is automatically scheduled as a managed background job;
+this does not impose PSO, a population budget, or a topic-specific core controller.
+
+Keep builders, residual choices and experiment loops in the model-authored project.
+Promote code to a tool only when its numerical operation is reusable independently
+of one lattice or research route. A complete design controller is not a necessary
+contribution. Remove obsolete implementations and their exports rather than keeping
+hidden fallback procedures that continue to shape new work. Saved project code and
+evidence remain history; removed APIs require explicit source review before replay,
+not an implicit migration or a substituted calculation.
 
 ### Ordinary Python tools and scientific acceptance
 
@@ -182,6 +205,8 @@ The optional `@acceptance` arguments have these responsibilities:
 - `id`: a stable, unique report key; a module-qualified name avoids collisions.
 - `applies_to(request)`: identifies requests that require this scientific evidence, not a fixed
   sequence of tool calls. Keep read-only and conceptual questions out of a construction gate.
+- Check measured outcomes independently of the solver. Do not require one class name,
+  optimizer's generation schema, or unrequested later stage as proof of a different claim.
 - `instructions`: explains the evidence and constraints to the agent when this check applies.
 - `preflight(source)`: optionally returns a list of advisory strings about a saved program. This
   is guidance, not permission to replace actual evidence validation or silently rewrite code.
@@ -272,10 +297,11 @@ discovery and its tools/checks are unavailable. Removing a module has the same c
 existing archived evidence is retained, but replaying its scientific validation requires the
 module. Duplicate acceptance IDs and legacy aliases are configuration errors, not priority rules.
 
-`@python_tool(legacy_names=("old_api_name",))` is an optional migration aid for archived programs
-that previously called a function directly on `accelerator_api`. New knowledge and code should
-use the module namespace. Compatibility aliases exist only while their owning module is enabled;
-they are not permanent domain functions in Brilliance's core.
+New knowledge and code use the module namespace. SDK aliases, when deliberately
+declared by a module author, resolve only an existing exported primitive; they do
+not restore removed source or promise compatibility for old design controllers.
+The removed MBA controllers have no callable compatibility layer. Brilliance never
+rewrites archived programs automatically when an expert API changes.
 
 ## Packaging and review
 

@@ -353,6 +353,7 @@
         ? "Numerical campaign running"
         : (backend.configured === false ? "model setup needed" : project.status.replaceAll("_", " "));
     }
+    if (project.active_lattice_id) els.progress.textContent += ` · Working lattice: ${project.active_lattice_id}`;
     if (!snapshot.live && (snapshot.session?.protocol_recovery || snapshot.session?.pause_requested)) {
       els.status.textContent = computationRunning ? "Agent paused · calculation running" : "Research paused";
     }
@@ -509,6 +510,9 @@
     }
     const body = document.createElement("div");
     body.className = "message-body";
+    if (message.meta?.stage_id || message.meta?.candidate_id) {
+      body.appendChild(renderScientificContext(message.meta));
+    }
     const content = document.createElement("div");
     content.className = "message-content";
     content.innerHTML = markdown(message.content);
@@ -577,6 +581,25 @@
     if (attachment.type === "tool") return renderTool(attachment);
     if (attachment.type === "metrics") return renderMetrics(attachment);
     if (attachment.type === "evidence_summary") return renderEvidenceSummary(attachment);
+    if (attachment.type === "alternative_results") {
+      const details = document.createElement("details");
+      details.className = "alternative-results";
+      const heading = document.createElement("summary");
+      heading.textContent = `${attachment.title || "Other calculations"} (${(attachment.rows || []).length})`;
+      details.appendChild(heading);
+      (attachment.rows || []).forEach((row) => {
+        const entry = document.createElement("div");
+        entry.className = "alternative-result";
+        const identity = document.createElement("div");
+        identity.className = "scientific-context";
+        identity.textContent = [row.run_id, row.status, "Not selected for this answer"].filter(Boolean).join(" · ");
+        const text = document.createElement("p");
+        text.textContent = row.summary || "";
+        entry.append(identity, text);
+        details.appendChild(entry);
+      });
+      return details;
+    }
     if (attachment.type === "evidence_reference") {
       const link = document.createElement("button");
       link.type = "button";
@@ -609,7 +632,7 @@
       image.alt = attachment.title || "Research plot";
       image.loading = "lazy";
       const caption = document.createElement("figcaption");
-      caption.textContent = attachment.title || "Research plot";
+      caption.textContent = [attachment.title || "Research plot", attachment.lattice_id].filter(Boolean).join(" · ");
       figure.append(image, caption);
       return figure;
     }
@@ -645,6 +668,17 @@
     return card;
   }
 
+  function renderScientificContext(stage = {}, latticeId = "") {
+    const context = document.createElement("div");
+    context.className = "scientific-context";
+    const labels = [stage.stage_id, stage.hypothesis_id && `Hypothesis: ${stage.hypothesis_id}`,
+      stage.outcome && stage.outcome.replaceAll("_", " "),
+      (latticeId || stage.candidate_id) && `Candidate: ${latticeId || stage.candidate_id}`,
+      stage.parent_candidate_id && `Parent: ${stage.parent_candidate_id}`].filter(Boolean);
+    context.textContent = labels.join(" · ");
+    return context;
+  }
+
   function renderEvidenceSummary(attachment) {
     const card = document.createElement("section");
     card.className = "evidence-summary-card";
@@ -652,6 +686,50 @@
     title.className = "card-title";
     title.textContent = attachment.title || "Scientific stage evidence";
     card.appendChild(title);
+    if (attachment.presentation_role === "selected_evidence") {
+      const selected = document.createElement("div");
+      selected.className = "selected-evidence-label";
+      const working = attachment.working_lattice_action === "advance";
+      const selectionRequested = attachment.candidate_handoff?.disposition === "working_selection_requested";
+      selected.textContent = "Evidence for this answer" + (attachment.candidate_lattice
+        ? working ? " · selected as provisional working candidate by this calculation"
+          : !attachment.working_lattice_action && selectionRequested
+            ? " · working selection requested in the saved result"
+            : " · archived candidate, not a working-lattice selection"
+        : "");
+      card.appendChild(selected);
+    }
+    if (attachment.history_rehydrated) {
+      const restored = document.createElement("p");
+      restored.className = "evidence-summary-text";
+      restored.textContent = attachment.history_rehydrated;
+      card.appendChild(restored);
+    }
+    const stage = attachment.scientific_stage || {};
+    if (attachment.candidate_lattice && attachment.lattice_id) {
+      const identity = document.createElement("p");
+      identity.className = "evidence-summary-text";
+      const active = state.snapshot?.project?.active_lattice_id;
+      identity.textContent = `Displayed candidate: ${attachment.lattice_id}` +
+        (active ? ` · Current working lattice: ${active}` : "") +
+        (active && active !== attachment.lattice_id ? " · Separate trial; does not replace the working lattice." : "");
+      card.appendChild(identity);
+    }
+    if (attachment.outcome_presentation?.evidence_status) {
+      const status = document.createElement("p");
+      status.className = "evidence-summary-text";
+      status.textContent = `Evidence status: ${attachment.outcome_presentation.evidence_status.replaceAll("_", " ")}`;
+      card.appendChild(status);
+    }
+    if (attachment.lattice_id || Object.keys(stage).length) {
+      card.appendChild(renderScientificContext(stage, attachment.lattice_id));
+    }
+    if (attachment.run_id) {
+      const receipt = document.createElement("div");
+      receipt.className = "evidence-receipt";
+      receipt.textContent = `Calculation: ${attachment.run_id}`;
+      card.appendChild(receipt);
+    }
     if (attachment.summary) {
       const summary = document.createElement("p");
       summary.className = "evidence-summary-text";
@@ -667,6 +745,11 @@
       card.appendChild(gate);
     }
     if (attachment.steps?.length) {
+      const methods = document.createElement("details");
+      methods.className = "evidence-methods";
+      const heading = document.createElement("summary");
+      heading.textContent = "Calculation methods and provenance";
+      methods.appendChild(heading);
       const list = document.createElement("ol");
       list.className = "evidence-method-steps";
       attachment.steps.forEach((step) => {
@@ -674,9 +757,38 @@
         item.textContent = step;
         list.appendChild(item);
       });
-      card.appendChild(list);
+      methods.appendChild(list);
+      card.appendChild(methods);
     }
-    (attachment.tables || []).forEach((entry) => {
+    const evidenceTables = attachment.tables || [];
+    const isAutomaticQuantities = entry => entry.kind === "automatic_quantities"
+      || (!entry.kind && entry.title === "Computed quantities"); // Legacy platform-generated table.
+    const hasCuratedTables = evidenceTables.some(entry => !isAutomaticQuantities(entry) && entry.kind !== "candidate_evaluation");
+    evidenceTables.forEach((entry) => {
+      const rows = entry.rows || [];
+      // Large diagnostic inventories remain available without pushing the
+      // selected candidate's figures below pages of auxiliary rows. A typed
+      // authoritative receipt stays accessible in full; a curated scientific
+      // summary takes precedence over repeating every verified quantity.
+      const verifiedDetails = entry.kind === "candidate_evaluation" && hasCuratedTables;
+      const automaticDetails = isAutomaticQuantities(entry) && evidenceTables.some(table => !isAutomaticQuantities(table));
+      if (verifiedDetails || automaticDetails || (rows.length > 16 && entry.kind !== "candidate_evaluation")) {
+        const details = document.createElement("details");
+        details.className = "detailed-evidence-table" + (verifiedDetails ? " verified-evidence-details" : automaticDetails ? " automatic-quantity-details" : "");
+        const heading = document.createElement("summary");
+        heading.textContent = verifiedDetails ? `Verified numerical details (${rows.length} quantities)`
+          : automaticDetails ? `Additional recorded quantities (${rows.length})`
+            : `${entry.title || "Detailed evidence"} · ${rows.length} rows`;
+        details.appendChild(heading);
+        if (entry.description) {
+          const description = document.createElement("p");
+          description.textContent = entry.description;
+          details.appendChild(description);
+        }
+        details.appendChild(makeTable(rows));
+        card.appendChild(details);
+        return;
+      }
       const heading = document.createElement("div");
       heading.className = "evidence-table-title";
       heading.textContent = entry.title || "Evidence";
@@ -687,8 +799,15 @@
         description.textContent = entry.description;
         card.appendChild(description);
       }
-      card.appendChild(makeTable(entry.rows || []));
+      card.appendChild(makeTable(rows));
     });
+    for (const [key, label] of [["interpretation", "Interpretation"], ["next_decision", "Next scientific decision"]]) {
+      if (!stage[key]) continue;
+      const text = document.createElement("p");
+      text.className = "evidence-summary-text";
+      text.textContent = `${label}: ${stage[key]}`;
+      card.appendChild(text);
+    }
     if (attachment.pending_acceptance?.length) {
       const heading = document.createElement("div");
       heading.className = "evidence-table-title";

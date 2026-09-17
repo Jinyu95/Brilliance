@@ -55,25 +55,38 @@ def continued_request_acceptance(
 
     def is_continuation(text: str) -> bool:
         return bool(re.fullmatch(
-            r"\s*(?:please\s+)?(?:continue|resume|go\s+on|go\s+ahead|carry\s+on|keep\s+going|proceed|继续|继续吧|接着)\s*[.!。!！]?\s*",
+            r"\s*(?:please\s+)?(?:continue|resume|go\s+on|go\s+ahead|carry\s+on|keep\s+going|proceed|do\s+it|继续|继续吧|接着)\s*[.!。!！]?\s*",
             text, re.IGNORECASE,
         ))
 
     if not is_continuation(request):
         return request_acceptance_requirements(request, registry=registry)
+    completion_proofs = []
     for row in reversed(history):
         if row.get("role") == "assistant":
             meta = row.get("meta", {})
-            if isinstance(meta, Mapping) and (
-                isinstance(meta.get("completion_evidence"), Mapping)
-                or (meta.get("runtime") == "native_research_agent" and meta.get("kind") == "result"
-                    and meta.get("request_satisfied") is True)
-            ):
-                return ()
+            proof = meta.get("completion_evidence") if isinstance(meta, Mapping) else None
+            if isinstance(proof, Mapping):
+                completion_proofs.append(proof)
         if row.get("role") == "user":
             content = str(row.get("content", ""))
             if content.strip() and not is_continuation(content):
-                return request_acceptance_requirements(content, registry=registry)
+                required = request_acceptance_requirements(content, registry=registry)
+                if not required:
+                    return ()
+                for proof in completion_proofs:
+                    checked = proof.get("scientific_acceptance", {})
+                    checks = checked.get("checks", {}) if isinstance(checked, Mapping) else {}
+                    if (proof.get("kind") == "scientist_request_completion_from_saved_evidence"
+                            and proof.get("evidence_run_id")
+                            and proof.get("execution_valid") is True and proof.get("scientific_passed") is True
+                            and isinstance(checks, Mapping)
+                            and all(isinstance(checks.get(name), Mapping) and checks[name].get("passed") is True
+                                    for name in required)):
+                        return ()
+                # A legacy empty/irrelevant success proof cannot clear the
+                # pending request's currently installed evidence requirements.
+                return required
     return ()
 
 
@@ -116,6 +129,7 @@ def assess_scientific_acceptance(
     required: Sequence[str] = (),
     lattice: Any = None,
     registry: Any = None,
+    evidence_directory: Path | str | None = None,
 ) -> dict[str, Any]:
     """Validate declared reports without changing the calculation-validity flag."""
 
@@ -144,7 +158,9 @@ def assess_scientific_acceptance(
             if check.requires_lattice and lattice is None:
                 issues.append("this expert acceptance requires the exact archived candidate_lattice")
             try:
-                findings = check.validator(report, lattice)
+                from .candidate_evidence import numerical_evidence_directory
+                with numerical_evidence_directory(evidence_directory):
+                    findings = check.validator(report, lattice)
                 if not isinstance(findings, (list, tuple)) or any(not isinstance(item, str) for item in findings):
                     raise TypeError("validator must return a list of issue strings, empty only when valid")
                 issues.extend(findings)

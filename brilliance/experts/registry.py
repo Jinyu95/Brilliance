@@ -181,6 +181,12 @@ class ExpertRegistry:
         module = self.module(module_id)
         return self._python_libraries[module.id]
 
+    @property
+    def durable_python_calls(self) -> frozenset[str]:
+        """Installed long numerical operations; execution policy is topic-neutral."""
+        return frozenset(name for group in self._python_tools.values() for tool in group
+                         if tool.durable for name in (tool.name, *tool.legacy_names))
+
     def legacy_python_tool(self, name: str):
         try:
             return self._legacy_python_tools[name]
@@ -234,7 +240,8 @@ class ExpertRegistry:
             "modules": [
                 {
                     **module.as_dict(include_assets=True),
-                    "python_tools": [item.as_dict() for item in self._python_tools[module.id]],
+                    "python_tools": [item.as_dict() for item in self._python_tools[module.id]
+                                     if item.discoverable],
                     "acceptance_checks": [
                         item.as_dict() for item in self._acceptance_checks if item.module_id == module.id
                     ],

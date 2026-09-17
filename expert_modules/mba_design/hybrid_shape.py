@@ -109,6 +109,7 @@ def hybrid_mba_shape_diagnostics(
     thresholds: Mapping[str, Any], sampling: Mapping[str, Any] | None = None,
     lattice_id: str | None = None,
     stage: str = "full_hybrid",
+    installation_slots: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """Measure actual sampled outer interior maxima, central envelope/H and ID.
 
@@ -121,8 +122,9 @@ def hybrid_mba_shape_diagnostics(
     rejected trials have an empty profile plus their actual failure/trace values.
     Returns metrics (D_bump_L_m, D_bump_R_m, D_core_m, H_core_max_m,
     dispersion_contrast, shape_penalty), peaks, checks, and scaled residuals.
-    Full evaluator and result examples: read_expert(module_id="laboratory.mba_design",
-    asset_id="references/hybrid_shape_api.md").
+    This is a measured shape diagnostic, independent of construction or solver.
+    Final claim verification is documented in references/hmba_outcome_api.md;
+    shape alone does not establish sextupole-pair or nonlinear performance.
     """
     rows = _rows(elements)
     roles = hybrid_mba_bend_roles(rows)
@@ -168,7 +170,9 @@ def hybrid_mba_shape_diagnostics(
                 and sampling.get("cell_fingerprint") == fingerprint)
     peaks = {}
     checks = {"sampled_profile_and_map": coverage}
-    metrics: dict[str, Any] = {"max_sample_gap_m": max_gap}
+    global_peak = max(points, key=lambda p: p["Dx"])
+    metrics: dict[str, Any] = {"max_sample_gap_m": max_gap,
+        "global_max_dispersion_m": global_peak["Dx"], "global_max_dispersion_s_m": global_peak["s_m"]}
     for side, region_name, metric in (("left", "left_bump", "D_bump_L_m"),
                                       ("right", "right_bump", "D_bump_R_m")):
         region = roles["regions"][region_name]
@@ -190,6 +194,7 @@ def hybrid_mba_shape_diagnostics(
         stationary = abs(peak["Dpx"]) <= limits["peak_slope_tolerance"]
         peaks[side] = {"s_m": peak["s_m"], "Dx_m": peak["Dx"], "Dpx": peak["Dpx"],
                        "interior_maximum": interior, "stationary": stationary,
+                       "region": region_name, "source_element": peak.get("source_element", peak.get("name")),
                        "region_start_m": start, "region_end_m": end}
         metrics[metric] = peak["Dx"]
         checks[f"{side}_interior_maximum"] = interior
@@ -201,6 +206,15 @@ def hybrid_mba_shape_diagnostics(
         raise ValueError("No optical samples in the central core.")
     core_dx = max(abs(row["Dx"]) for row in core_points)
     core_h = max(row["H_x_m"] for row in core_points)
+    core_dx_peak = max(core_points, key=lambda p: abs(p["Dx"]))
+    core_h_peak = max(core_points, key=lambda p: p["H_x_m"])
+    peaks["core_dispersion"] = {"region": "core", "s_m": core_dx_peak["s_m"],
+        "Dx_m": core_dx_peak["Dx"], "max_abs_Dx_m": core_dx,
+        "source_element": core_dx_peak.get("source_element", core_dx_peak.get("name"))}
+    peaks["core_H"] = {"region": "core", "s_m": core_h_peak["s_m"], "H_x_m": core_h,
+        "source_element": core_h_peak.get("source_element", core_h_peak.get("name"))}
+    peaks["global_dispersion"] = {"region": "whole_cell", "s_m": global_peak["s_m"],
+        "Dx_m": global_peak["Dx"], "source_element": global_peak.get("source_element", global_peak.get("name"))}
     core_h_mean = (sum((a["H_x_m"] + b["H_x_m"]) * (b["s_m"] - a["s_m"]) / 2
                        for a, b in zip(core_points, core_points[1:]))
                    / (core_points[-1]["s_m"] - core_points[0]["s_m"])) if len(core_points) > 1 else core_h
@@ -235,6 +249,7 @@ def hybrid_mba_shape_diagnostics(
                          core_H=max(0.0, core_h / limits["max_core_h_m"] - 1))
     from .hybrid_optics import usable_bump_drifts
     usability = usable_bump_drifts(rows, points, roles, limits, core_dx)
+    slot_measurements = _installation_slots(rows, points, roles, installation_slots)
     checks.update(usability["checks"])
     metrics.update(usability["metrics"])
     # A plateau can span the entire inter-bend window: its rising/falling
@@ -262,11 +277,52 @@ def hybrid_mba_shape_diagnostics(
     metrics["shape_penalty"] = sum(value ** 2 for value in residuals.values()) + sum(
         1.0 for side in ("left", "right") if not checks[f"{side}_interior_maximum"])
     return {"schema": SCHEMA, "lattice_id": lattice_id, "cell_fingerprint": fingerprint,
-            "scope": "shape_diagnostics_only", "stage": stage, "thresholds": limits, "roles": roles,
+            "scope": "shape_diagnostics_only", "measurement_contract": "physical_mba_regions/v1",
+            "stage": stage, "thresholds": limits, "roles": roles,
             "metrics": metrics, "peaks": peaks, "usable_drifts": usability["drifts"],
+            "installation_slot_names": dict(installation_slots or {}),
+            "installation_slots": slot_measurements,
+            "installation_slots_status": "measured" if installation_slots else "not_declared",
             "checks": checks, "passed": all(checks.values()),
             "residuals": residuals, "sampling": sampling, "profile": points, "cell_rows": rows,
             "limitations": ["Linear dispersion shape only; not chromatic correction or nonlinear acceptance."]}
+
+
+def _installation_slots(rows, points, roles, slots):
+    """Measure explicitly reserved, disjoint global mirror drift spans; no selection."""
+    if not slots:
+        return {}
+    if set(slots) != {"SF_L", "SD_L", "SF_R", "SD_R"}:
+        raise ValueError("Declare exactly SF_L, SD_L, SF_R, SD_R installation spans")
+    names = [r["name"] for r in rows]
+    starts = np.cumsum([0.] + [r["length_m"] for r in rows])
+    groups, used, measured = {}, set(), {}
+    for label, selection in slots.items():
+        ids = [names.index(name) for name in selection]
+        if (not ids or ids != list(range(ids[0], ids[-1]+1)) or used.intersection(ids)
+                or any(rows[i]["kind"] not in {"DRIFT", "MARKER"} for i in ids)):
+            raise ValueError("Installation slots must be distinct contiguous physical drift spans")
+        region = "left_bump" if label.endswith("_L") else "right_bump"
+        if not set(ids) <= set(roles["regions"][region]["element_indices"]):
+            raise ValueError(label + " is not inside its outer inter-bend region")
+        used.update(ids)
+        groups[label] = ids
+        start, end = float(starts[ids[0]]), float(starts[ids[-1]+1])
+        if end <= start:
+            raise ValueError("Installation slots must have finite positive length")
+        samples = [p for p in points if start-1e-10 <= p["s_m"] <= end+1e-10]
+        if not samples or abs(samples[0]["s_m"]-start) > 1e-8 or abs(samples[-1]["s_m"]-end) > 1e-8:
+            raise ValueError("Installation slot endpoint samples are missing")
+        peak = max(samples, key=lambda p: p["Dx"])
+        measured[label] = {"elements": list(selection), "region": region, "s_start_m": start, "s_end_m": end,
+            "min_Dx_m": min(p["Dx"] for p in samples), "max_Dx_m": peak["Dx"], "peak_s_m": peak["s_m"],
+            "max_abs_Dpx": max(abs(p["Dpx"]) for p in samples),
+            "max_beta_x_Dx_m2": max(p["beta_x"]*p["Dx"] for p in samples),
+            "max_beta_y_Dx_m2": max(p["beta_y"]*p["Dx"] for p in samples)}
+    for family in ("SF", "SD"):
+        if groups[family+"_R"] != [len(rows)-1-i for i in reversed(groups[family+"_L"])]:
+            raise ValueError("Installation partners must be globally mirrored")
+    return measured
 
 
 def evaluate_hybrid_mba_shape(
@@ -275,8 +331,15 @@ def evaluate_hybrid_mba_shape(
     max_step_m: float = 0.05, minimum_magnet_length_m: float = 0.0,
     minimum_drift_length_m: float = 0.0,
     stage: str = "full_hybrid",
+    sampler: Any = None,
+    installation_slots: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
-    """JuTrack-backed final shape evidence, bound to the exact saved candidate."""
+    """Shared JuTrack measurement for search and checking, bound to exact rows.
+
+    An optional reusable JuTrackProfileSampler avoids setup per proposal. Its
+    energy and step must match; scalar/length changes are synchronized from the
+    supplied candidate every time. Topology changes require a new sampler.
+    """
     from brilliance import accelerator_api as api
     from brilliance.optics_sampling import JuTrackProfileSampler
 
@@ -290,8 +353,12 @@ def evaluate_hybrid_mba_shape(
         expected_bends=roles["bend_count"], require_mirror_symmetry=True, limits=limits,
         minimum_magnet_length_m=minimum_magnet_length_m,
         minimum_drift_length_m=minimum_drift_length_m)
-    sampler = JuTrackProfileSampler(lattice, max_step_m=max_step_m)
-    linear = sampler.linear_metrics()
+    fresh_sampler = sampler is None
+    if fresh_sampler:
+        sampler = JuTrackProfileSampler(lattice, max_step_m=max_step_m)
+    elif sampler._candidate.energy_gev != lattice.energy_gev or sampler.max_step_m != max_step_m:
+        raise ValueError("Reusable sampler energy/step differs from the measurement contract")
+    linear = sampler.linear_metrics() if fresh_sampler else sampler.linear_metrics(rows)
     if not linear.get("stable"):
         return {"schema": SCHEMA, "lattice_id": lattice.lattice_id, "stage": stage,
                 "scope": "complete_cell_shape_gate" if stage == "full_hybrid" else "complete_cell_bump_feasibility_gate",
@@ -300,7 +367,7 @@ def evaluate_hybrid_mba_shape(
                 "construction_audit": audit, "cell_fingerprint": cell_fingerprint(rows),
                 "sampling": linear["sampling"], "one_turn_matrix": linear["one_turn_matrix"]}
     report = hybrid_mba_shape_diagnostics(rows, linear["twiss_profile"], thresholds=thresholds,
-        sampling=linear["sampling"], lattice_id=lattice.lattice_id, stage=stage)
+        sampling=linear["sampling"], lattice_id=lattice.lattice_id, stage=stage, installation_slots=installation_slots)
     report.update({"scope": "complete_cell_shape_gate", "stable": True, "construction_audit": audit,
                    "one_turn_matrix": linear["one_turn_matrix"],
                    "machine_contract": {"energy_gev": lattice.energy_gev,
@@ -348,7 +415,8 @@ def validate_hybrid_mba_shape_report(report: Any, lattice: Any = None) -> list[s
         if report.get("cell_fingerprint") != cell_fingerprint(rows):
             return ["Hybrid shape evidence does not match these physical cell elements."]
         recomputed = hybrid_mba_shape_diagnostics(rows, report["profile"], thresholds=report["thresholds"],
-            sampling=report["sampling"], lattice_id=report.get("lattice_id"))
+            sampling=report["sampling"], lattice_id=report.get("lattice_id"),
+            installation_slots=report.get("installation_slot_names"))
         contract = report["machine_contract"]
         if lattice is not None and not math.isclose(lattice.energy_gev, float(contract["energy_gev"]), rel_tol=1e-12):
             return ["Hybrid shape evidence belongs to a different beam energy."]
@@ -389,11 +457,21 @@ def validate_hybrid_mba_shape_report(report: Any, lattice: Any = None) -> list[s
         issues = ["Hybrid shape check failed: " + key for key, passed in checks.items() if not passed]
         if report.get("passed") is not all(checks.values()) or report.get("checks") != checks:
             issues.append("Hybrid shape flags disagree with recomputed evidence.")
-        if (report.get("metrics") != recomputed["metrics"] or report.get("peaks") != recomputed["peaks"]
+        expected_metrics, expected_peaks = recomputed["metrics"], recomputed["peaks"]
+        if report.get("measurement_contract") is None:
+            # Additive observation metadata must not invalidate old sealed v2
+            # evidence. Recheck every original observable without rewriting it.
+            expected_metrics = {k: v for k, v in expected_metrics.items() if k not in {
+                "global_max_dispersion_m", "global_max_dispersion_s_m"}}
+            expected_peaks = {side: {k: v for k, v in expected_peaks[side].items()
+                if k not in {"region", "source_element"}} for side in ("left", "right")}
+        if (report.get("metrics") != expected_metrics or report.get("peaks") != expected_peaks
                 or report.get("usable_drifts") != recomputed["usable_drifts"]):
             issues.append("Hybrid shape measurements disagree with the archived profile.")
         if report.get("roles") != recomputed["roles"]:
             issues.append("Hybrid bend roles disagree with physical order.")
+        if report.get("measurement_contract") and report.get("installation_slots") != recomputed["installation_slots"]:
+            issues.append("Installation slot measurements disagree with the archived profile.")
         return issues
     except (ValueError, TypeError, KeyError, AttributeError, IndexError, OverflowError) as exc:
         return [f"Incomplete or invalid hybrid shape evidence: {type(exc).__name__}: {exc}"]

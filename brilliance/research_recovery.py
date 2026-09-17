@@ -8,8 +8,36 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .artifacts import content_hash
+from .failure_diagnostics import execution_failure_summary
 from .presentation import ResearchConversationStore
 from .workspace_inspection import saved_recovery_context
+
+_LEGACY_LATTICE_SCOPE_ERRORS = (
+    "ValueError: lattice does not declare an integer periodic-cell partition",
+    "ValueError: invalid cell_element_count in the lattice archive",
+)
+
+# Saved programs may have failed before progress payloads had a dedicated type.
+# Match only reporting contracts, never general ValueError or filesystem errors.
+_LEGACY_REPORTING_INPUT_ERRORS = (
+    "ValueError: progress kind must be plan, progress, finding, decision, repair, or next",
+    "ValueError: scientific_role must be milestone or activity",
+    "ValueError: each progress table must be a mapping with a rows list",
+    "ValueError: progress table must contain a rows list",
+    "ValueError: every progress table row must be a mapping of column names",
+    "ValueError: each progress plot must be a path or a mapping with a path",
+    "ValueError: progress plot must be stored below workspace/artifacts",
+    "ValueError: progress event_key must not be empty",
+    "ValueError: status must be completed, infeasible, or partial",
+)
+
+
+def _reporting_input_failure(headline: str) -> bool:
+    return bool(
+        re.match(r"^(?:\w+\.)*ProgressInputError:", headline)
+        or headline in _LEGACY_REPORTING_INPUT_ERRORS
+        or re.fullmatch(r"ValueError: progress plot does not exist: [^\r\n]+", headline)
+    )
 
 
 def scientist_request(root: Path, project_id: str) -> dict[str, str]:
@@ -22,11 +50,25 @@ def scientist_request(root: Path, project_id: str) -> dict[str, str]:
 
 
 def coding_failure_summary(error: str) -> str | None:
-    # Do not send infrastructure, cancellation, or a physical rejection through
-    # a code-repair loop. Keep the complete traceback in the diagnostic artifact.
-    matches = re.findall(r"(?m)^\s*((?:TypeError|AttributeError|KeyError|NameError|UnboundLocalError|SyntaxError|IndentationError|(?:\w+\.)*(?:OptimizerInputError|LatticeInputError|LatticeTopologyError)):[^\r\n]+)", error)
+    # Compatibility hints for familiar API mistakes, NOT an admission gate.
+    # Every failed saved program can receive diagnosis; the agent must establish
+    # the actual cause before deciding whether a code repair is appropriate.
+    matches = re.findall(r"(?m)^\s*((?:TypeError|AttributeError|KeyError|NameError|UnboundLocalError|SyntaxError|IndentationError|(?:\w+\.)*(?:OptimizerInputError|LatticeInputError|LatticeTopologyError|LatticeScopeError|ProgressInputError)):[^\r\n]+)", error)
     if matches:
         return matches[-1][:800]
+    progress = [line.strip() for line in error.splitlines()
+                if _reporting_input_failure(line.strip())]
+    if progress:
+        return progress[-1][:800]
+    # Archived programs predate the typed cell/full-ring scope contract. Only
+    # these exact metadata errors are safe to route to a coding repair; no
+    # physical periodic-solution or bend-closure failures belong in this branch.
+    scopes = re.findall(
+        r"(?m)^\s*(" + "|".join(re.escape(item) for item in _LEGACY_LATTICE_SCOPE_ERRORS)
+        + r")\s*$", error,
+    )
+    if scopes:
+        return scopes[-1]
     # These exact pre-typed editor errors also appear in saved failed programs.
     # Do not classify general topology/solver ValueErrors as programming errors.
     topology = re.findall(r"(?m)^\s*(ValueError: (?:JuTrack row synchronization cannot (?:change topology|reorder elements)|Dense optics proposals cannot change element order, names, or kinds))\s*$", error)
@@ -34,7 +76,7 @@ def coding_failure_summary(error: str) -> str | None:
         return topology[-1]
     # These are optimizer input-contract errors, not failure to find a physical
     # solution. Other ValueError failures are deliberately not classified here.
-    contracts = re.findall(r"(?m)^\s*(ValueError: (?:named bounds must|bounds must|initial_position must|named initial_position must|variable_names must|objective_names must|optimization checkpoint does not match)[^\r\n]+)", error)
+    contracts = re.findall(r"(?m)^\s*(ValueError: (?:named bounds must|bounds must|initial_position must|named initial_position must|variable_names must|objective_names must|optimization checkpoint does not match|(?:population_size|generations)=\d+ is below the declared production minimum)[^\r\n]+)", error)
     if not contracts:
         # Compatibility for archived pre-typed constructor failures only; do
         # not classify ordinary solver ValueErrors as coding mistakes.
@@ -42,15 +84,59 @@ def coding_failure_summary(error: str) -> str | None:
     return contracts[-1][:800] if contracts else None
 
 
-def execution_failure_summary(error: str) -> str:
-    """Keep the actual non-repairable error visible without dumping its traceback."""
-    matches = re.findall(r"(?m)^\s*([A-Za-z_][\w.]*(?:Error|Exception):[^\r\n]+)", error)
-    return matches[-1][:800] if matches else error.splitlines()[0][:800] if error.strip() else "Calculation could not complete"
-
-
 def program_failure_guidance(error: str) -> dict[str, str]:
     """Plain-language explanation and a narrow, non-physics repair instruction."""
-    headline = coding_failure_summary(error) or execution_failure_summary(error)
+    headline = execution_failure_summary(error)
+    if _reporting_input_failure(headline):
+        return {
+            "explanation": "The generated program could not publish a progress or result update because "
+                "its reporting arguments were invalid. This is a reporting API error, not evidence "
+                "that the accelerator calculation or lattice failed.",
+            "repair_hint": "Inspect the exact saved program and diagnostic in this project. "
+                "Correct only the reporting call: run.progress uses kind for the message category "
+                "and scientific_role for milestone/activity; tables need a rows list of mappings, "
+                "plots must reference real files below workspace/artifacts, and event_key must not "
+                "be empty. run.finish status is completed, infeasible, or partial; an intermediate "
+                "stage remains partial, not a completed request. Do not invent output files or "
+                "suppress validation. Preserve the saved "
+                "TME or other candidate, its full-precision fields, calculation outputs and optimizer "
+                "checkpoints. Recover the exact saved stage and publish its existing results before "
+                "continuing the original request. Do not regenerate a seed, repeat a completed search, "
+                "change physics requirements, or claim new numerical evidence from a reporting repair. "
+                "If needed results were never saved, disclose that limitation before planning a "
+                "bounded recovery; do not claim the checkpoint contains them.",
+        }
+    if "LatticeScopeError:" in headline or headline in _LEGACY_LATTICE_SCOPE_ERRORS:
+        return {
+            "explanation": "The generated program's lattice metadata does not consistently say "
+                "whether the saved rows are one periodic cell or an explicitly repeated full ring. "
+                "Brilliance could not safely select one cell. This is a data/API setup error, "
+                "not evidence that the accelerator lattice is unstable or infeasible.",
+            "repair_hint": "Inspect the exact archived candidate, its construction source and the "
+                "machine contract in this project. Establish whether those physical rows are one "
+                "cell or a full ring before correcting metadata. For a confirmed single cell use "
+                "api.periodic_cell(..., intended_repetitions=P); for a full ring built from a "
+                "confirmed cell use api.cell_ring(..., periods=P). Preserve every physical element "
+                "and its fields, original machine requirements, accepted parent and checkpoints. "
+                "Do not infer scope from bend angle alone, borrow another project's lattice, or "
+                "pad, truncate, slice or repeat rows arbitrarily to make a partition pass. If scope "
+                "cannot be established from saved provenance, report the missing evidence instead "
+                "of guessing. If only setup or reporting failed, correct that step and recover "
+                "the saved numerical results; do not regenerate a seed or restart optimization.",
+        }
+    if "below the declared production minimum" in headline:
+        return {
+            "explanation": "The generated optimizer setup does not meet its declared population or "
+                "generation budget. This is a setup error, not evidence that the lattice is infeasible.",
+            "repair_hint": "Keep the saved matched candidate and original machine limits. Before "
+                "loading JuTrack, inspect design.as_dict() and call api.plan_lattice_optimization "
+                "with the compiled outer and matching parameterizations. Show the actual knob table. "
+                "Check which element fields were intended: fields=('length_m', 'k1_m2') frees BOTH "
+                "fields on eligible quadrupoles. Use included_element_names_by_field for explicit "
+                "field ownership. Do not silently add knobs, lower minimum_population_per_knob, "
+                "relax physics limits, regenerate the unit, or restart completed optimization. "
+                "Size the requested campaign from the verified plan and report the corrected budget.",
+        }
     topology = ("LatticeTopologyError:" in headline or headline.startswith((
         "ValueError: JuTrack row synchronization cannot",
         "ValueError: Dense optics proposals cannot change element order")))
@@ -70,7 +156,7 @@ def program_failure_guidance(error: str) -> dict[str, str]:
                 "the selected rows using the saved program and best_candidate['variables'], replay that "
                 "one candidate and finish reporting; do not repeat the population search.",
         }
-    if coding_failure_summary(error):
+    if coding_failure_summary(headline):
         return {"explanation": "The generated research program used an invalid argument, variable or API call. "
                 "This is a coding error, not a physics conclusion.", "repair_hint": ""}
     return {"explanation": "", "repair_hint": ""}
@@ -82,21 +168,26 @@ def repair_pause_explanation(recovery: Mapping[str, Any]) -> str:
     if reason == "repair_handoff_failed":
         reason = "handoff_failed"
     reasons = {
-        "repair_disabled": "Automatic code repair is disabled by BRILLIANCE_AUTO_REPAIR_ATTEMPTS=0. "
-            "Enable it to permit bounded coding repairs, or ask the agent to inspect the saved program.",
-        "repair_budget_exhausted": "Automatic code repair reached its safe limit for this request. "
-            "The diagnostic needs review before another attempt; the same calculation was not restarted.",
-        "same_source_failed_again": "The same unchanged program already failed with this error. "
-            "It was not rerun again. Ask the agent to inspect and correct the saved source before retrying.",
+        "repair_disabled": "Automatic diagnosis and repair is disabled by BRILLIANCE_AUTO_REPAIR_ATTEMPTS=0. "
+            "Enable it to permit bounded recovery, or ask the agent to inspect the saved program.",
+        "repair_budget_exhausted": "Automatic diagnosis and repair reached its configured limit for this request. "
+            "The saved diagnostic needs review before another attempt; completed calculations were not reset.",
+        "same_source_failed_again": "The same unchanged program and inputs already failed with this error. "
+            "Another automatic handoff was not started. Review the diagnosis and change the faulty code "
+            "or inputs before retrying; do not repeat a completed calculation.",
         "scientist_paused_or_cancelled": "Automatic repair was not started because you paused or stopped "
             "this research. Send a new instruction when you want it to resume.",
         "request_changed_or_not_recorded": "Automatic repair was not started because the original request "
             "was superseded or could not be confirmed. Your latest instruction takes precedence.",
         "handoff_failed": "Brilliance could not start the repair handoff. The handoff diagnostic was saved; "
             "ask the agent to inspect this failed job before retrying.",
-        "not_a_repairable_program_error": "Automatic repair was not started because this failure has not "
-            "been classified as a safely repairable program error. Ask the agent to inspect the saved "
-            "diagnostic; runtime/access problems require attention rather than repeating the calculation.",
+        "not_a_saved_program": "This failed operation is not a saved research program. "
+            "Its owning service needs diagnosis; no unrelated program was restarted.",
+        "program_outside_workspace": "The failed program path is outside this project's workspace. "
+            "Correct its project ownership before automatic recovery can proceed.",
+        "not_a_repairable_program_error": "This historical failure was stopped by the previous "
+            "exception-classification policy. Reopen the project with the updated application and "
+            "request diagnosis from its saved checkpoint; no numerical result has been discarded.",
     }
     return reasons.get(reason, "Automatic repair could not be scheduled. Ask the agent to inspect the "
                        "saved diagnostic before retrying; no further calculation was started.")
@@ -223,15 +314,21 @@ def schedule_result_review(root: Path, jobs: Any, job: Any, project: Any,
 
 def schedule_coding_repair(root: Path, jobs: Any, job: Any, project: Any,
                            failure_path: Path, error: str) -> dict[str, Any]:
+    """Return any failed saved execution for bounded diagnosis and possible repair.
+
+    Exception names supply hints, never permission to retry, change requirements
+    or repair the platform. Cancellation, scope and loop guards own admission.
+    """
     from .codex_runtime import CodexRuntimeStore
     from .jobs import launch_research_job
     from .research_session import SessionWorkspace
 
-    headline = coding_failure_summary(error)
-    if not headline or str(job.payload.get("tool_id")) not in {
+    if str(job.payload.get("tool_id")) not in {
         "accelerator.run_research_program", "accelerator.run_long_research_program"
     }:
-        return {"scheduled": False, "reason": "not_a_repairable_program_error"}
+        return {"scheduled": False, "reason": "not_a_saved_program"}
+    headline = execution_failure_summary(error)
+    root = Path(root).resolve()
     origin = job.payload.get("scientist_request", {})
     latest = scientist_request(root, project.id)
     if not origin or origin.get("id") != latest.get("id"):
@@ -255,28 +352,58 @@ def schedule_coding_repair(root: Path, jobs: Any, job: Any, project: Any,
         return {"scheduled": False, "reason": "repair_budget_exhausted"}
     arguments = job.payload.get("arguments", {})
     script = str(arguments.get("script", ""))
-    source = (directory / "workspace" / script).resolve()
-    source_hash = content_hash(source.read_text(encoding="utf-8")) if source.is_relative_to(directory / "workspace") and source.is_file() else "unavailable"
-    failure_key = content_hash({"source": source_hash, "error": headline})
+    workspace = directory / "workspace"
+    relative = Path(script)
+    if not relative.is_absolute() and relative.parts and relative.parts[0].casefold() == "workspace":
+        relative = Path(*relative.parts[1:])
+    source = (workspace / relative).resolve()
+    if not source.is_relative_to(workspace):
+        return {"scheduled": False, "reason": "program_outside_workspace"}
+    try:
+        source_hash = content_hash(source.read_text(encoding="utf-8")) if source.is_file() else "unavailable"
+    except OSError:
+        source_hash = "unavailable"  # A source access error still warrants read-only diagnosis.
+    arguments_hash = content_hash(arguments.get("arguments", {}))
+    failure_key = content_hash({"source": source_hash, "script": source.relative_to(workspace).as_posix(),
+                                "arguments": arguments_hash, "error": headline})
     if any(item.get("failure_key") == failure_key for item in attempts):
         return {"scheduled": False, "reason": "same_source_failed_again"}
     prompt = (
-        "Automatic recovery of a background PROGRAMMING error, not a new scientist request. "
+        "Automatic diagnosis and possible repair of a failed research execution, not a new scientist request. "
         "Any newer scientist instruction takes precedence over this repair notice.\n"
         f"Original request: {origin['content']}\n"
-        f"Program: {script}\nExact error: {headline}\n"
+        f"Program: {script}\nObserved exception: {headline}\n"
         f"Diagnostic: {failure_path.relative_to(directory).as_posix()}\n"
-        f"Repair attempt {len(attempts) + 1}/{budget}. Read the saved source, patch the coding error, "
-        "and verify it with the configured runtime. Do not rerun unchanged source. Preserve successful "
-        "evidence and optimizer checkpoints; if only postprocessing failed, recover the saved result "
-        "without repeating optimization. Do not install packages, change interpreters, relax physical "
-        "requirements, substitute templates, or search the internet. Show a concise repair update "
-        "and then useful numerical results. If a repair needs a scientist decision, explain it and stop."
+        f"Recovery attempt {len(attempts) + 1}/{budget}. Inspect the traceback, exact saved source, "
+        "arguments, numerical outcomes and checkpoints BEFORE choosing a change. An exception name "
+        "does not establish the cause. Explain what failed, which results survive, and the smallest "
+        "justified next action in chat.\n"
+        "For a demonstrated coding/API/reporting error, repair project-local code or inputs and verify "
+        "the smallest affected step with the configured runtime. Do not rerun an unchanged failed attempt. "
+        "Preserve successful evidence and optimizer checkpoints; if only postprocessing failed, recover "
+        "the saved result without repeating optimization. Never replace a missing numerical value with "
+        "a fabricated result or suppress an exception as a physics success.\n"
+        "For an unsuccessful numerical search, inspect actual feasibility and residuals before "
+        "postprocessing a selected candidate. An infeasible archive is not a valid design. A missing "
+        "feasible solution is evidence to diagnose and report, not permission to remove a physics gate. "
+        "Distinguish original hard requirements from model-invented conditions: a reference scale or "
+        "aspiration must not silently become a validity gate. Correct a mistaken objective or gate only "
+        "with evidence from the original requirements and applicable physics knowledge; a changed "
+        "numerical problem needs a new campaign identity and freshly evaluated objective values. "
+        "A justified next scientific experiment must remain within the original request and limits; "
+        "do not relaunch a large campaign solely to repair its reporting.\n"
+        "For runtime/access/credential/resource problems, perform read-only diagnosis first. Do not "
+        "install packages, change interpreters or Julia configuration, permissions, credentials, "
+        "internet policy, or physical requirements. If recovery needs new authority or a scientist "
+        "decision, preserve the checkpoint and ask one specific question. Do not search the internet "
+        "or substitute a stored template. Unknown errors are to be investigated, not automatically "
+        "declared unrepairable."
         "\n" + program_failure_guidance(error)["repair_hint"] +
         "\n" + saved_recovery_context(directory / "workspace")
     )
     record = {"scheduled": True, "scientist_request_id": origin["id"], "failure_key": failure_key,
-              "attempt": len(attempts) + 1, "source_sha": source_hash, "summary": headline}
+              "attempt": len(attempts) + 1, "source_sha": source_hash, "summary": headline,
+              "arguments_sha": arguments_hash, "mode": "diagnose_and_repair"}
     records.mkdir(parents=True, exist_ok=True)
     # Claim the handoff once even if the completion notification is delivered twice.
     try:
@@ -290,7 +417,7 @@ def schedule_coding_repair(root: Path, jobs: Any, job: Any, project: Any,
     else:
         recovery = jobs.submit(project.id, project.revision, action="codex_turn", payload={
             "message": prompt, "initial": False, "increment": 1, "max_increments": 1,
-            "research_mode": "research", "repair_of": job.job_id,
+            "research_mode": "research", "recovery_mode": "diagnose_and_repair", "repair_of": job.job_id,
             "repair_request_id": origin["id"],
         })
         launch_research_job(root, recovery)

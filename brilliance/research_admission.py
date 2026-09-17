@@ -118,7 +118,8 @@ def assess_research_admission(
         (
             "Use retrieved accelerator knowledge and a saved task-specific JuTrack program. "
             "Treat every new design as provisional until its declared numerical and physics "
-            "checks pass; no fixed construction workflow is implied."
+            "checks pass. Freedom to write the program does not waive the applicable expert's "
+            "physical initialization or evidence requirements."
         ),
     )
 

@@ -40,11 +40,13 @@ def deduplicate_chat_attachments(messages: list[dict[str, Any]]) -> None:
     seen: dict[str, str] = {}
     image_versions: dict[str, str] = {}
     summaries_by_content: dict[str, dict[str, Any]] = {}
+    selected_presentations: set[str] = set()
     for message in messages:
         if message.get("role") == "user":
             seen.clear()
             image_versions.clear()
             summaries_by_content.clear()
+            selected_presentations.clear()
         if message.get("meta", {}).get("runtime") == "managed_compute":
             # Historical managed completions embedded the same table twice:
             # generated Markdown plus a structured attachment. Remove only the
@@ -101,6 +103,17 @@ def deduplicate_chat_attachments(messages: list[dict[str, Any]]) -> None:
                 continue
             row = dict(attachment)
             kind = row.get("type")
+            if row.get("presentation_role") == "selected_evidence":
+                # The final selected result is a coherent scientific handoff,
+                # not a pointer back to scattered intermediate messages.
+                # Render its own exact figures/tables once, even if progress
+                # already showed them. Repeated final copies remain compact.
+                identity = content_hash(row)
+                if identity in selected_presentations:
+                    continue
+                selected_presentations.add(identity)
+                attachments.append(row)
+                continue
             if kind == "evidence_reference":
                 reference = (str(row.get("message_id", "")), str(row.get("title", "")))
                 if reference in references:

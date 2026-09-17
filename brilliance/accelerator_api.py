@@ -17,9 +17,14 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
+from .api_result_types import MagnetStrengthLimits, PeriodicCellEvaluation
 from .artifacts import json_safe
+from .candidate_evidence import (
+    restore_candidate_evaluation,  # noqa: F401 - verified archived result reader
+)
+from .evaluation_results import evaluation_snapshot  # noqa: F401 - public result reader
 from .julia_runtime import load_pyjutrack
-from .lattice import LatticeElementIR, LatticeIR
+from .lattice import LatticeElementIR, LatticeIR, LatticeScopeError, lattice_cell_partition
 from .lattice_editing import (
     insert_element_between,  # noqa: F401 - public expert API
     insert_element_in_drift,  # noqa: F401 - public expert API
@@ -74,6 +79,7 @@ def build_jutrack_lattice(candidate: LatticeIR | Path | str) -> Any:
     from .jutrack_service import JuTrackService
 
     lattice_ir = load_lattice(candidate) if isinstance(candidate, (Path, str)) else candidate
+    lattice_cell_partition(lattice_ir)
     return JuTrackService(load_pyjutrack()).build_lattice(lattice_ir)
 
 
@@ -570,12 +576,15 @@ def audit_lattice_constraints(
     minimum_magnet_length_m: float = 0.0,
     minimum_drift_length_m: float = 0.0,
     limits: Mapping[str, float] | None = None,
+    length_bounds_m: Mapping[str, Sequence[float]] | None = None,
 ) -> dict[str, Any]:
     """Audit geometry and hard-edge field limits before any JuTrack call.
 
     Counts nonzero-angle elements (not hidden physical-magnet groupings). A
     passed construction audit is NOT stability, achromaticity, or design success.
     Call again for every proposed candidate, including diagnostic scans.
+    Optional length_bounds_m maps physical kinds (SBEND, KQUAD, KSEXT, KOCT,
+    DRIFT) to [lower, upper] in metres; no MBA defaults are imposed here.
     """
     for value in (energy_gev, expected_length_m):
         if not math.isfinite(value) or value <= 0:
@@ -592,6 +601,9 @@ def audit_lattice_constraints(
         if not math.isfinite(float(envelope[key])) or float(envelope[key]) <= 0:
             raise ValueError(f"invalid engineering limit: {key}")
     items = [item if isinstance(item, LatticeElementIR) else LatticeElementIR.from_mapping(item) for item in elements]
+    for kind, pair in (length_bounds_m or {}).items():
+        if kind not in {"SBEND", "RBEND", "KQUAD", "QUAD", "KSEXT", "KOCT", "DRIFT"} or len(pair) != 2 or not all(math.isfinite(x) and x >= 0 for x in pair) or pair[0] > pair[1]:
+            raise ValueError(f"invalid physical length bounds for {kind}")
     issues: list[str] = []
     if not items:
         issues.append("empty lattice")
@@ -612,10 +624,19 @@ def audit_lattice_constraints(
         minimum = minimum_drift_length_m if item.kind == "DRIFT" else minimum_magnet_length_m
         if item.kind != "MARKER" and (item.length_m <= 0 or item.length_m < minimum):
             issues.append(f"{item.name}: length below physical minimum")
+        pair = (length_bounds_m or {}).get(item.kind)
+        if pair is not None and not pair[0] - 1e-12 <= item.length_m <= pair[1] + 1e-12:
+            issues.append(f"{item.name}: length outside declared {item.kind} range")
         field = brho * abs(float(item.angle_rad or 0)) / item.length_m if item.length_m > 0 else 0.0
         fractions = {"dipole": field / envelope["dipole_field_t"],
                      "quadrupole": abs(float(item.k1_m2 or 0)) / envelope["max_abs_k1_m2"],
                      "sextupole": abs(float(item.k2_m3 or 0)) / envelope["max_abs_k2_m3"]}
+        if item.k3_m4:
+            cap = envelope.get("max_abs_k3_m4")
+            if cap is None or not math.isfinite(float(cap)) or cap <= 0:
+                issues.append(f"{item.name}: octupole requires an explicit field/aperture limit")
+            else:
+                fractions["octupole"] = abs(float(item.k3_m4)) / cap
         for kind, fraction in fractions.items():
             if not math.isfinite(fraction) or fraction > 1 + 1e-12:
                 issues.append(f"{item.name}: {kind} exceeds field limit")
@@ -639,7 +660,14 @@ def lattice_geometry_summary(
         | Sequence[LatticeElementIR | Mapping[str, Any]]
     ),
 ) -> dict[str, Any]:
-    """Return deterministic order/length/angle/name checks before JuTrack."""
+    """Return deterministic order/length/angle/name checks before JuTrack.
+
+    Returns a dictionary with element_count, physical_bend_count (also
+    bend_count), total_length_m, total_angle_rad, unique_names and
+    duplicate_names. Use summary["total_length_m"] and
+    summary["total_angle_rad"]; these are not the length_m/angle_rad keys
+    returned by audit_lattice_constraints. No optics or radiation is computed.
+    """
 
     if isinstance(elements, (Path, str)):
         sequence: Sequence[LatticeElementIR | Mapping[str, Any]] = load_lattice(elements).elements
@@ -674,8 +702,19 @@ def magnet_strength_limits(
     sextupole_pole_tip_field_t: float = 0.6,
     quadrupole_radius_m: float = 0.02,
     sextupole_radius_m: float = 0.02,
-) -> dict[str, float]:
-    """Return field-derived limits for an ultra-relativistic unit-charge beam."""
+    octupole_pole_tip_field_t: float | None = None,
+    octupole_radius_m: float | None = None,
+    length_m: float | None = None,
+) -> MagnetStrengthLimits:
+    """Field-derived limits for an ultra-relativistic unit-charge beam.
+
+    Normalized Kn = (1/Brho) d^n By/dx^n: Kn_max = n! Bpole/(Brho*r^n).
+    These local strengths are independent of length. With length_m, also return
+    max_abs_angle_rad=Bmax*L/Brho and max_abs_k1l_m1/k2l_m2/k3l_m3=Kn_max*L.
+    JuTrack stores scalar k2/k3 as derivatives; PolynomB uses k2/2 and k3/6.
+    Octupole limits require BOTH explicit field and radius; no technology default
+    is invented. This envelope does not authorize combined-function dipoles.
+    """
 
     values = {
         "energy_gev": float(energy_gev),
@@ -688,7 +727,7 @@ def magnet_strength_limits(
     if any(not math.isfinite(value) or value <= 0.0 for value in values.values()):
         raise ValueError("energy, field limits, and reference radii must be finite and positive")
     brho = values["energy_gev"] / 0.299792458
-    return {
+    result = {
         **values,
         "brho_tm": brho,
         "minimum_bend_radius_m": brho / values["dipole_field_t"],
@@ -698,6 +737,23 @@ def magnet_strength_limits(
         * values["sextupole_pole_tip_field_t"]
         / (values["sextupole_radius_m"] ** 2 * brho),
     }
+    if (octupole_pole_tip_field_t is None) != (octupole_radius_m is None):
+        raise ValueError("Supply both octupole pole-tip field and radius")
+    if octupole_pole_tip_field_t is not None:
+        if any(not math.isfinite(v) or v <= 0 for v in (octupole_pole_tip_field_t, octupole_radius_m)):
+            raise ValueError("octupole field and radius must be positive and finite")
+        result.update(octupole_pole_tip_field_t=float(octupole_pole_tip_field_t),
+                      octupole_radius_m=float(octupole_radius_m),
+                      max_abs_k3_m4=6 * octupole_pole_tip_field_t / (brho * octupole_radius_m**3))
+    if length_m is not None:
+        if not math.isfinite(length_m) or length_m <= 0:
+            raise ValueError("length_m must be positive and finite")
+        result.update(length_m=float(length_m), max_abs_angle_rad=dipole_field_t * length_m / brho,
+                      max_abs_k1l_m1=result["max_abs_k1_m2"] * length_m,
+                      max_abs_k2l_m2=result["max_abs_k2_m3"] * length_m)
+        if "max_abs_k3_m4" in result:
+            result["max_abs_k3l_m3"] = result["max_abs_k3_m4"] * length_m
+    return result
 
 
 def lattice(
@@ -710,9 +766,13 @@ def lattice(
     parent_lattice_id: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> LatticeIR:
-    """Create a canonical executable candidate sequence without publishing it."""
+    """Create an explicit stored sequence, never implicitly repeat its rows.
 
-    return LatticeIR.create(
+    periodicity counts cells ALREADY present. Use periodic_cell for one cell
+    intended for later repetition; cell_ring expands rows to a repeated ring.
+    """
+
+    candidate = LatticeIR.create(
         title=title,
         energy_gev=energy_gev,
         periodicity=periodicity,
@@ -721,6 +781,8 @@ def lattice(
         parent_lattice_id=parent_lattice_id,
         metadata=metadata,
     )
+    lattice_cell_partition(candidate)
+    return candidate
 
 
 def periodic_cell(
@@ -740,12 +802,15 @@ def periodic_cell(
     been assembled into an achromat and the achromat has been repeated to 2*pi.
     """
 
-    if intended_repetitions is not None and intended_repetitions < 1:
-        raise ValueError("intended_repetitions must be positive")
+    supplied_metadata = dict(metadata or {})
+    # Structural scope belongs to this constructor, not to its parent ring.
+    if supplied_metadata.get("evaluation_scope") != "periodic_cell":
+        supplied_metadata.pop("intended_repetitions", None)
     combined_metadata = {
-        **dict(metadata or {}),
+        **supplied_metadata,
         "evaluation_scope": "periodic_cell",
         "ring_complete": False,
+        "repetitions": 1,
         "cell_element_count": len(elements),
     }
     if intended_repetitions is not None:
@@ -775,8 +840,11 @@ def cell_ring(
     """Create an explicit repeated full ring from an arbitrary programmed cell."""
 
     supplied_metadata = dict(metadata or {})
+    supplied_metadata.pop("intended_repetitions", None)
     combined_metadata = {
         **supplied_metadata,
+        "evaluation_scope": "full_ring",
+        "ring_complete": True,  # declared scope, not a numerical closure certificate
         "repetitions": periods,
         "cell_element_count": len(cell),
     }
@@ -800,6 +868,7 @@ def save_lattice(path: Path | str, candidate: LatticeIR) -> Path:
     """Save a candidate specification; publication remains a separate validated action."""
 
     destination = Path(path).resolve()
+    lattice_cell_partition(candidate)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(
         json.dumps(candidate.as_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -815,10 +884,10 @@ def load_lattice(path: Path | str) -> LatticeIR:
         raise ValueError("Lattice file must contain one JSON object")
     if payload.get("lattice_id"):
         return LatticeIR.from_dict(payload)
-    return lattice(
+    return LatticeIR.create(
         title=str(payload["title"]),
         energy_gev=float(payload["energy_gev"]),
-        periodicity=int(payload.get("periodicity", 1)),
+        periodicity=payload.get("periodicity", 1),
         elements=payload.get("elements", payload.get("rows", ())),
         source=str(payload.get("source", f"candidate file {Path(path).name}")),
         parent_lattice_id=(
@@ -843,20 +912,12 @@ def one_period_elements(
     """
 
     lattice_ir = load_lattice(candidate) if isinstance(candidate, (Path, str)) else candidate
+    count, _ = lattice_cell_partition(lattice_ir)
     if lattice_ir.metadata.get("evaluation_scope") == "periodic_cell":
         rows = [json_safe(asdict(item)) for item in lattice_ir.elements]
         if len({row["name"] for row in rows}) != len(rows):
             raise ValueError("periodic cell contains duplicate physical element names")
         return rows
-    repetitions = int(lattice_ir.metadata.get("repetitions", lattice_ir.periodicity))
-    cell_count = lattice_ir.metadata.get("cell_element_count")
-    if cell_count is None:
-        if repetitions < 1 or len(lattice_ir.elements) % repetitions:
-            raise ValueError("lattice does not declare an integer periodic-cell partition")
-        cell_count = len(lattice_ir.elements) // repetitions
-    count = int(cell_count)
-    if count < 1 or count > len(lattice_ir.elements):
-        raise ValueError("invalid cell_element_count in the lattice archive")
     selected = lattice_ir.elements[:count]
     sources = [str(item.fields.get("source_element") or "") for item in selected]
     prefixes = [item.name[:-(len(source) + 1)]
@@ -894,6 +955,7 @@ def build_jutrack_editor(
     from .jutrack_service import JuTrackService
 
     lattice_ir = load_lattice(candidate) if isinstance(candidate, (Path, str)) else candidate
+    lattice_cell_partition(lattice_ir)
     jt = load_pyjutrack()
     mutable = JuTrackService(jt).build_lattice(lattice_ir)
     return JuTrackLatticeEditor(jt, mutable, [asdict(item) for item in lattice_ir.elements])
@@ -923,9 +985,14 @@ def evaluate(
     include_profile: bool = False,
     include_chromaticity: bool = False,
 ) -> CandidateEvaluationResult:
-    """Run JuTrack and return a typed result while preserving the complete raw evidence."""
+    """Run JuTrack and return a typed result while preserving complete raw evidence.
+
+    Use api.evaluation_snapshot(result) for the same geometry/optics/radiation
+    reading contract as evaluate_periodic_cell; retain result itself for finish.
+    """
 
     lattice_ir = load_lattice(candidate) if isinstance(candidate, (Path, str)) else candidate
+    lattice_cell_partition(lattice_ir)
     jt = load_pyjutrack()
     linear = _linear_evaluation(jt, lattice_ir)
     from .result_presentation import remember_candidate_evidence
@@ -974,7 +1041,11 @@ def evaluate(
                 else "Radiation was not claimed because the JuTrack one-turn map is unstable."
             ),
         }
+    from .evaluation_results import evaluated_geometry
+    result["evaluation_geometry"] = evaluated_geometry(lattice_ir)
     safe = json_safe(result)
+    from .candidate_evidence import record_evaluation
+    safe["evaluation_receipt"] = record_evaluation(lattice_ir, safe)
     linear_raw = dict(safe["linear_optics"])
     linear_result = LinearOpticsResult(
         stable=bool(linear_raw.get("stable")),
@@ -1009,7 +1080,7 @@ def evaluate_periodic_cell(
     *,
     periods: int | None = None,
     include_profile: bool = False,
-) -> dict[str, Any]:
+) -> PeriodicCellEvaluation:
     """Evaluate one periodic cell without explicitly expanding the full ring.
 
     This is the fast path for seed solving and optimizer loops.  It returns a
@@ -1017,17 +1088,23 @@ def evaluate_periodic_cell(
     integrals are scaled to the declared identical ring only when the one-cell
     optics are stable and ``periods * cell_bend`` closes to ``2*pi``.  A final
     selected design must still pass :func:`evaluate` on its explicit full ring.
+    api.evaluation_snapshot(result) provides the common read-only result schema.
     """
 
     lattice_ir = load_lattice(candidate) if isinstance(candidate, (Path, str)) else candidate
+    lattice_cell_partition(lattice_ir)
     if lattice_ir.metadata.get("evaluation_scope") != "periodic_cell":
-        raise ValueError("evaluate_periodic_cell requires a candidate created by periodic_cell")
+        raise LatticeScopeError("evaluate_periodic_cell requires a candidate created by periodic_cell; "
+                                "use api.periodic_cell with the confirmed single-cell rows and intended_repetitions")
     declared = periods if periods is not None else lattice_ir.metadata.get("intended_repetitions")
     if declared is None:
-        raise ValueError("periods is required when intended_repetitions is not declared")
-    count = int(declared)
-    if count < 1 or count != declared:
-        raise ValueError("periods must be a positive integer")
+        raise LatticeScopeError("periods is required when intended_repetitions is not declared")
+    try:
+        count = int(declared)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise LatticeScopeError("periods must be a positive integer") from exc
+    if isinstance(declared, bool) or count < 1 or count != declared:
+        raise LatticeScopeError("periods must be a positive integer")
 
     jt = load_pyjutrack()
     from .jutrack_service import JuTrackService
@@ -1068,7 +1145,7 @@ def evaluate_periodic_cell(
                 f"tolerance={closure_tolerance_rad:.12g} rad."
             ),
         }
-    return json_safe(
+    result = json_safe(
         {
             "engine": "JuTrack",
             "candidate_lattice_id": lattice_ir.lattice_id,
@@ -1088,13 +1165,27 @@ def evaluate_periodic_cell(
             "full_ring_validation_required": True,
         }
     )
+    from .evaluation_results import evaluated_geometry
+    result["evaluation_geometry"] = evaluated_geometry(lattice_ir, reference_periods=count)
+    from .candidate_evidence import record_evaluation
+    result["evaluation_receipt"] = record_evaluation(lattice_ir, result, effective_periods=count)
+    return result
 
 
 def _linear_evaluation(jt: Any, lattice: LatticeIR) -> dict[str, Any]:
     """Direct JuTrack periodic-optics evaluation used by :func:`evaluate`."""
 
+    from .lattice_optimization import _is_jutrack_twiss_domain_error
+
     ring = build_jutrack_lattice(lattice)
-    matrix = np.asarray(jt.findm66(ring, dp=0.0), dtype=float)
+    if len(ring) != len(lattice.elements):
+        raise ValueError("JuTrack lattice does not match the saved element count")
+    try:
+        matrix = np.asarray(jt.findm66(ring, dp=0.0), dtype=float)
+    except ResearchInfeasible as exc:
+        return {"stable": False, "trace_x": None, "trace_y": None,
+                "twiss_profile": [], "periodic_closure_max": math.inf,
+                "model_limits": [f"{type(exc).__name__}: {exc}"]}
     if matrix.shape != (6, 6):
         raise TypeError(f"JuTrack findm66 must return a 6x6 matrix; got {matrix.shape}")
     if not bool(np.all(np.isfinite(matrix))):
@@ -1104,7 +1195,7 @@ def _linear_evaluation(jt: Any, lattice: LatticeIR) -> dict[str, Any]:
             "trace_y": None,
             "twiss_profile": [],
             "periodic_closure_max": math.inf,
-            "model_limits": ["JuTrack returned a non-finite or non-6x6 one-turn map."],
+            "model_limits": ["JuTrack returned a non-finite one-turn map."],
         }
     trace_x = float(np.trace(matrix[:2, :2]))
     trace_y = float(np.trace(matrix[2:4, 2:4]))
@@ -1118,8 +1209,27 @@ def _linear_evaluation(jt: Any, lattice: LatticeIR) -> dict[str, Any]:
             "one_turn_matrix": matrix.tolist(),
             "model_limits": ["JuTrack one-turn map is linearly unstable."],
         }
+    def reject_periodic_optics(reason: str) -> dict[str, Any]:
+        return {
+            "stable": False, "trace_stable": True,
+            "trace_x": trace_x, "trace_y": trace_y, "twiss_profile": [],
+            "periodic_closure_max": math.inf, "one_turn_matrix": matrix.tolist(),
+            "solver": "JuTrack findm66 + periodicEdwardsTengTwiss + twissline",
+            "model_limits": [
+                "The map passed the trace test but no finite periodic JuTrack Twiss solution "
+                f"was obtained: {reason}"
+            ],
+        }
+
     try:
         periodic = jt.periodicEdwardsTengTwiss(ring, 0.0, 0)
+        if getattr(periodic, "mode", 1) == 0:
+            return reject_periodic_optics("JuTrack periodic Twiss returned invalid mode=0")
+        start = _twiss_point("START", 0.0, periodic)
+        physical_fields = ("beta_x", "beta_y", "alpha_x", "alpha_y", "Dx", "Dpx", "Dy", "Dpy")
+        if (not all(math.isfinite(start[key]) for key in physical_fields)
+                or start["beta_x"] <= 0.0 or start["beta_y"] <= 0.0):
+            return reject_periodic_optics("periodic Twiss has nonfinite or nonpositive physical optics")
         endpoint = jt.twissline(periodic, ring, dp=0.0, order=0)
         points = jt.twissline(
             periodic,
@@ -1128,15 +1238,20 @@ def _linear_evaluation(jt: Any, lattice: LatticeIR) -> dict[str, Any]:
             order=0,
             refpts=list(range(1, len(ring) + 1)),
         )
-        profile = [_twiss_point("START", 0.0, periodic)]
+        if len(points) != len(lattice.elements):
+            raise ValueError("JuTrack profile does not cover every element exit")
+        profile = [start]
         position = 0.0
         for element, point in zip(lattice.elements, points):
             position += element.length_m
             profile.append(_twiss_point(element.name, position, point))
-        start_beta_x = float(getattr(periodic, "betax"))
-        start_beta_y = float(getattr(periodic, "betay"))
-        if start_beta_x <= 0.0 or start_beta_y <= 0.0:
-            raise ValueError("periodic beta functions must be positive")
+        end = _twiss_point("END", position, endpoint)
+        if any(not all(math.isfinite(row[key]) for key in physical_fields)
+               or row["beta_x"] <= 0.0 or row["beta_y"] <= 0.0
+               for row in [*profile, end]):
+            return reject_periodic_optics("Twiss propagation has nonfinite or nonpositive physical optics")
+        start_beta_x = start["beta_x"]
+        start_beta_y = start["beta_y"]
         residuals = {
             "beta_x": (float(getattr(endpoint, "betax")) - start_beta_x) / start_beta_x,
             "alpha_x": float(getattr(endpoint, "alphax")) - float(getattr(periodic, "alphax")),
@@ -1144,29 +1259,22 @@ def _linear_evaluation(jt: Any, lattice: LatticeIR) -> dict[str, Any]:
             "alpha_y": float(getattr(endpoint, "alphay")) - float(getattr(periodic, "alphay")),
             "Dx": float(getattr(endpoint, "dx")) - float(getattr(periodic, "dx")),
             "Dpx": float(getattr(endpoint, "dpx")) - float(getattr(periodic, "dpx")),
+            "Dy": float(getattr(endpoint, "dy")) - float(getattr(periodic, "dy")),
+            "Dpy": float(getattr(endpoint, "dpy")) - float(getattr(periodic, "dpy")),
         }
         tune = tuple(float(value) for value in jt.gettune(ring))
-        if len(tune) < 2 or not all(math.isfinite(value) for value in tune[:2]):
-            raise ValueError("JuTrack returned a non-finite tune")
+        if len(tune) != 2:
+            raise TypeError(f"JuTrack gettune must return two tunes; got {len(tune)}")
+        if not all(math.isfinite(value) for value in tune):
+            return reject_periodic_optics("JuTrack returned a non-finite tune")
         if not all(math.isfinite(value) for value in residuals.values()):
-            raise ValueError("JuTrack returned non-finite periodic residuals")
-    except (TypeError, AttributeError, KeyError, IndexError, NameError, OSError, MemoryError):
-        raise
+            return reject_periodic_optics("JuTrack returned non-finite periodic residuals")
+    except ResearchInfeasible as exc:
+        return reject_periodic_optics(f"{type(exc).__name__}: {exc}")
     except Exception as exc:
-        return {
-            "stable": False,
-            "trace_stable": True,
-            "trace_x": trace_x,
-            "trace_y": trace_y,
-            "twiss_profile": [],
-            "periodic_closure_max": math.inf,
-            "one_turn_matrix": matrix.tolist(),
-            "solver": "JuTrack findm66 + periodicEdwardsTengTwiss + twissline",
-            "model_limits": [
-                "The map passed the trace test but no finite periodic JuTrack Twiss solution "
-                f"was obtained: {type(exc).__name__}: {exc}"
-            ],
-        }
+        if not _is_jutrack_twiss_domain_error(exc):
+            raise
+        return reject_periodic_optics(f"{type(exc).__name__}: {exc}")
     return {
         "stable": True,
         "trace_stable": True,
@@ -1176,6 +1284,11 @@ def _linear_evaluation(jt: Any, lattice: LatticeIR) -> dict[str, Any]:
         "tune_y": tune[1],
         "periodic_closure_max": max(abs(value) for value in residuals.values()),
         "periodic_residuals": residuals,
+        "beta_x_m": start["beta_x"], "beta_y_m": start["beta_y"],
+        "alpha_x": start["alpha_x"], "alpha_y": start["alpha_y"],
+        "Dx_m": start["Dx"], "Dpx": start["Dpx"],
+        "Dy_m": start["Dy"], "Dpy": start["Dpy"],
+        "maximum_beta_m": max(max(row["beta_x"], row["beta_y"]) for row in profile),
         "twiss_profile": profile,
         "one_turn_matrix": matrix.tolist(),
         "solver": "JuTrack findm66 + periodicEdwardsTengTwiss + twissline",
@@ -1193,6 +1306,8 @@ def _twiss_point(name: str, position_m: float, point: Any) -> dict[str, Any]:
         "alpha_y": float(getattr(point, "alphay")),
         "Dx": float(getattr(point, "dx")),
         "Dpx": float(getattr(point, "dpx")),
+        "Dy": float(getattr(point, "dy")),
+        "Dpy": float(getattr(point, "dpy")),
     }
     for source, target in (("mux", "mu_x_rad"), ("muy", "mu_y_rad")):
         value = getattr(point, source, None)
@@ -1227,6 +1342,8 @@ def _radiation_evaluation(
             "energy_spread": float(values["sigma_E"]),
             "energy_loss_per_turn_eV": float(values["U0"]),
             "method": "JuTrack ringpara",
+            "physical_element_treatment": "intact_original_elements",
+            "physical_element_count": len(evaluated_ring),
             "jutrack_ring_parameters": json_safe(dict(values)),
         }
     )
@@ -1395,26 +1512,62 @@ def bend_radiation_contributions(
     yielding B1...BM rows for an identical-cell ring.  Contributions come from
     JuTrack's own analytical ``elrad`` implementation and are accepted only
     when their I2/I4/I5 sums reproduce the same ring's ``ringpara`` values.
+
+    A ``periodic_cell`` with declared ``intended_repetitions`` is expanded
+    unchanged into its identical full ring for this calculation. The returned
+    ``lattice_id`` remains the supplied candidate; ``evaluated_lattice_id``
+    identifies that derived ring. No period count or partition is inferred.
     """
 
     lattice = load_lattice(candidate) if isinstance(candidate, (Path, str)) else candidate
+    lattice_cell_partition(lattice)
+    source_candidate = lattice
+    derived_periods = None
     if lattice.metadata.get("evaluation_scope") == "periodic_cell":
-        raise ValueError(
-            "per-bend radiation evidence requires the explicit closed full ring"
-        )
-    closure_error = lattice.bend_sum_rad - 2.0 * math.pi
-    if abs(closure_error) >= 1.0e-9:
+        declared = lattice.metadata.get("intended_repetitions")
+        if declared is None:
+            raise LatticeScopeError(
+                "per-bend radiation of a periodic_cell requires declared intended_repetitions; "
+                "use api.periodic_cell(..., intended_repetitions=P) or supply an explicit full ring"
+            )
+        # The partition validator already rejects nonfinite/noninteger metadata;
+        # use the same strict numeric declaration as evaluate_periodic_cell.
+        derived_periods = int(declared)
+        if isinstance(declared, bool) or derived_periods != declared:
+            raise LatticeScopeError("intended_repetitions must be a positive integer")
+    closure_error = lattice.bend_sum_rad * (derived_periods or 1) - 2.0 * math.pi
+    if not math.isfinite(closure_error) or abs(closure_error) >= 1.0e-9:
         raise ValueError(
             "per-bend radiation evidence requires exact 2*pi bend closure; "
             f"error={closure_error:.12g} rad"
+        )
+    if derived_periods is not None:
+        lattice = cell_ring(
+            title=f"{lattice.title} — identical ring for per-bend radiation",
+            energy_gev=lattice.energy_gev,
+            cell=lattice.elements,
+            periods=derived_periods,
+            source="bend_radiation_contributions: explicit repetition of the supplied periodic cell",
+            parent_lattice_id=lattice.lattice_id,
         )
     jt = _loaded_jutrack or load_pyjutrack()
     from .jutrack_service import JuTrackService
 
     ring = JuTrackService(jt).build_lattice(lattice)
     evidence = json_safe(_bend_radiation_contribution_evaluation(jt, ring, lattice))
+    if derived_periods is not None:
+        evidence.update({
+            "lattice_id": source_candidate.lattice_id,
+            "evaluated_lattice_id": lattice.lattice_id,
+            "evaluation_scope": "explicit_full_ring_from_declared_periodic_cell",
+            "periods": derived_periods,
+            "cell_element_count": len(source_candidate.elements),
+            "ring_element_count": len(lattice.elements),
+            "ring_length_m": lattice.total_length_m,
+            "ring_bend_sum_rad": lattice.bend_sum_rad,
+        })
     from .result_presentation import remember_candidate_evidence
-    remember_candidate_evidence(lattice, bends=evidence)
+    remember_candidate_evidence(source_candidate, bends=evidence)
     return evidence
 
 
@@ -1645,16 +1798,21 @@ def save_bend_radiation_contribution_plot(
     title: str = "Per-bend radiation-integral contributions",
     subtitle: str = "I2 and I5 fractions of the full ring",
 ) -> Path:
-    """Save the canonical grouped per-bend I2/I5 contribution figure."""
+    """Save measured per-bend I2/I5 fractions as SVG, PNG, or PDF.
 
-    from .plotting import render_bend_radiation_contributions_svg
+    SVG is dependency-free; PNG/PDF use headless Matplotlib. All formats plot
+    the same saved rows without recalculating or renormalizing the integrals.
+    """
 
-    return render_bend_radiation_contributions_svg(
-        evidence,
-        path,
-        title=title,
-        subtitle=subtitle,
-    )
+    destination = Path(path)
+    suffix = destination.suffix.lower()
+    if suffix not in {".svg", ".png", ".pdf"}:
+        raise ValueError("bend-radiation plot path must end in .svg, .png, or .pdf")
+    if suffix == ".svg":
+        from .plotting import render_bend_radiation_contributions_svg as render
+    else:
+        from .plotting import render_bend_radiation_contributions_matplotlib as render
+    return render(evidence, destination, title=title, subtitle=subtitle)
 
 
 def ring_survey_plot_rows(
@@ -1676,8 +1834,8 @@ def particle_swarm_optimize(
     objective_names: Sequence[str],
     initial_position: Sequence[float] | Mapping[str, float],
     variable_names: Sequence[str] | None = None,
-    population_size: int = 24,
-    generations: int = 20,
+    population_size: int | None = None,
+    generations: int | None = None,
     seed: int = 0,
     selection: str = "knee",
     seed_positions: Sequence[Sequence[float]] | None = None,
@@ -1688,6 +1846,7 @@ def particle_swarm_optimize(
     cancellation_check: Any | None = None,
     checkpoint_path: str | Path | None = None,
     evaluation_cache_directory: str | Path | None = None,
+    cache_evaluations: bool = True,
     campaign_identity: str | None = None,
     resume: bool = False,
 ) -> dict[str, Any]:
@@ -1696,6 +1855,12 @@ def particle_swarm_optimize(
     The callback owns all physics evaluation. For multiple objectives the
     optimizer combines parents and PSO-generated offspring, then performs
     constrained nondominated sorting and crowding selection.
+
+    Defaults are max(500, 10 * number_of_knobs) particles and 80 generations.
+    Managed research enforces scientist-configured [optimization] floors and
+    records requested/effective budgets. Resuming preserves the saved swarm.
+    Set cache_evaluations=False for fast callbacks to disable per-evaluation
+    cache files (ignoring any cache directory), but keep generation checkpoints.
     """
 
     from .population_optimization import particle_swarm_optimize as optimize
@@ -1718,6 +1883,7 @@ def particle_swarm_optimize(
         cancellation_check=cancellation_check,
         checkpoint_path=checkpoint_path,
         evaluation_cache_directory=evaluation_cache_directory,
+        cache_evaluations=cache_evaluations,
         campaign_identity=campaign_identity,
         resume=resume,
     )
@@ -1753,6 +1919,17 @@ def process_batch_evaluator(
 # written accelerator studies need only the stable public API.  JuTrack physics
 # remains in callbacks supplied by the study; these helpers own safe lattice
 # mutation, symmetry, continuation matching, and the outer population campaign.
+from .experiment_candidates import CandidateLedger  # noqa: E402,F401
+from .experiment_geometry import (  # noqa: E402,F401
+    prepare_length_budget,
+    remove_mirrored_quadrupole_pair,
+)
+from .experiments import (  # noqa: E402,F401
+    ExperimentDefinition,
+    JuTrackCellEvaluator,
+    LatticeExperiment,
+    MatchingOperation,
+)
 from .lattice_optimization import (  # noqa: E402,F401
     JuTrackLatticeEditor,
     LatticeKnob,
@@ -1770,8 +1947,11 @@ from .lattice_optimization import (  # noqa: E402,F401
     jutrack_radiation_metrics,
     local_seed_positions,
     optimize_lattice_parameters,
+    plan_lattice_optimization,
     search_feasible_parameter_seeds,
 )
+from .line_matching import match_jutrack_line, plan_matching_starts  # noqa: E402,F401
+from .line_optics import JuTrackLineEvaluator, evaluate_jutrack_line  # noqa: E402,F401
 
 
 def _optional_number(value: Any) -> float | None:

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import linecache
 import os
+import re
 import runpy
 import sys
 import traceback
 from pathlib import Path
 from typing import Any
 
+from .numerical_checkpoints import ReportingStopped
 from .research_outcomes import ResearchInfeasible
 
 _SENSITIVE = ("key", "token", "secret", "password", "credential")
@@ -50,9 +53,32 @@ def _safe_local(name: str, value: Any) -> Any:
         return value
     if isinstance(value, str):
         return value[:300]
+    if type(value) is dict:
+        # Key names resolve a missing-field error without dumping numerical
+        # archives, credentials, table rows or private values into model context.
+        keys = [key[:80] for key in value if isinstance(key, str)
+                and not any(term in key.casefold() for term in _SENSITIVE)]
+        return {"type": "dict", "length": len(value), "keys": keys[:24],
+                "keys_truncated": len(keys) > 24}
     if isinstance(value, (list, tuple, set, dict)):
         return f"<{type(value).__name__} length={len(value)}>"
     return f"<{type(value).__name__}>"
+
+
+def _failure_locals(frame: Any, *, max_chars: int = 2400) -> dict[str, Any]:
+    """Keep the failing expression's locals first, within the excerpt budget."""
+    source = linecache.getline(frame.tb_frame.f_code.co_filename, frame.tb_lineno)
+    relevant = set(re.findall(r"\b[A-Za-z_]\w*\b", source))
+    values = frame.tb_frame.f_locals
+    result: dict[str, Any] = {}
+    for name in sorted(values, key=lambda item: (item not in relevant, item)):
+        if name.startswith("__"):
+            continue
+        value = _safe_local(name, values[name])
+        proposed = {**result, name: value}
+        if len(json.dumps(proposed, ensure_ascii=True)) <= max_chars:
+            result = proposed
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -65,6 +91,11 @@ def main(argv: list[str] | None = None) -> int:
         sys.addaudithook(_offline_network_audit)
     try:
         runpy.run_path(str(path), run_name="__main__")
+        return 0
+    except ReportingStopped:
+        # The explicit reporting-only scope already committed a verified partial
+        # result and original traceback. Do not rerun numerical work or continue
+        # success-dependent statements after the broken presentation block.
         return 0
     except ResearchInfeasible as exc:
         # A negative scientific result is evidence, not a broken Python program.
@@ -93,11 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         while frame is not None and frame.tb_next is not None:
             frame = frame.tb_next
         if frame is not None:
-            locals_payload = {
-                name: _safe_local(name, value)
-                for name, value in sorted(frame.tb_frame.f_locals.items())
-                if not name.startswith("__")
-            }
+            locals_payload = _failure_locals(frame)
             print(
                 "BRILLIANCE_FAILURE_LOCALS="
                 + json.dumps(locals_payload, ensure_ascii=True, sort_keys=True),

@@ -40,7 +40,7 @@ candidate_wall_time_s = 3600
 # false disables Codex web search, apps/connectors/plugins, browser tools, and
 # shell-command networking. It does not disable local stdio MCP. Change it to
 # true only for an explicitly online study.
-internet_access = false
+internet_access = true
 
 # workspace-write permits JuTrack to read its installation while limiting writes
 # to the project and configured Julia depot. It is required for hard network denial.
@@ -54,12 +54,20 @@ backend = "local_process"
 local_worker_processes = 8
 threads_per_worker = 1
 
+[optimization]
+# Applied to new managed PSO/MOPSO campaigns, independently of research topic.
+# Smaller model-written budgets are raised visibly. Only the scientist should
+# lower these settings. Existing checkpoint swarms retain their original size.
+minimum_population = 500
+minimum_population_per_knob = 10
+minimum_generations = 80
+
 [mcp]
 # MCP is not synonymous with internet access. Preinstalled command-launched
 # stdio servers remain available in offline research mode. URL-based MCP servers
 # are a separate outbound-network capability and stay off for the current study.
 local_stdio_enabled = true
-remote_http_enabled = false
+remote_http_enabled = true
 
 [experts]
 # Add EXPERT.md knowledge modules under these roots. Optional typed tools.py files

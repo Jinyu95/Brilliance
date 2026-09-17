@@ -204,6 +204,7 @@ def _write_pso_checkpoint(
     complete: bool,
     personal_best: Sequence[Mapping[str, Any]] | None = None,
     global_best: Mapping[str, Any] | None = None,
+    budget: Mapping[str, Any] | None = None,
 ) -> None:
     if path is None:
         return
@@ -225,6 +226,7 @@ def _write_pso_checkpoint(
         "global_best": _checkpoint_candidate(global_best) if global_best is not None else None,
         "history": list(history),
         "complete": bool(complete),
+        "budget": dict(budget or {}),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, json.dumps(json_safe(payload), ensure_ascii=False,
@@ -272,6 +274,7 @@ def read_optimization_checkpoint(path: str | Path) -> dict[str, Any]:
         "best_candidate": _serial_candidate(selected, names, objectives),
         "pareto_candidates": [_serial_candidate(item, names, objectives) for item in front],
         "history": state["history"],
+        "budget": dict(state.get("budget") or {}),
         "scope": "archived_optimizer_evidence_requires_selected_candidate_revalidation",
     }
 
@@ -419,8 +422,8 @@ def particle_swarm_optimize(
     objective_names: Sequence[str],
     initial_position: Sequence[float] | Mapping[str, float],
     variable_names: Sequence[str] | None = None,
-    population_size: int = 24,
-    generations: int = 20,
+    population_size: int | None = None,
+    generations: int | None = None,
     seed: int = 0,
     selection: str = "knee",
     seed_positions: Sequence[Sequence[float]] | None = None,
@@ -431,6 +434,7 @@ def particle_swarm_optimize(
     cancellation_check: Callable[[], None] | None = None,
     checkpoint_path: str | Path | None = None,
     evaluation_cache_directory: str | Path | None = None,
+    cache_evaluations: bool = True,
     campaign_identity: str | None = None,
     resume: bool = False,
 ) -> dict[str, Any]:
@@ -441,12 +445,39 @@ def particle_swarm_optimize(
     offspring, then parents and offspring are combined and a complete
     non-dominated-sort/crowding environmental selection chooses the next
     population.  Particle identities therefore do not force survival.
+
+    Omitted budgets default to max(500, 10 * dimensions) particles and 80
+    generations. Managed research applies configured production floors; explicit
+    smaller standalone calls remain supported. Resume retains the saved swarm.
+    ``cache_evaluations=False`` skips all per-evaluation file caching, including
+    any supplied cache directory, while retaining complete generation checkpoints.
+    Interrupted partial generations may then need reevaluation on resume.
     """
     lower, upper, names, objectives, initial = _validated_inputs(
         bounds, objective_names, initial_position, variable_names
     )
-    size = _integer_option(population_size, "population_size", 4, 4096)
-    steps = _integer_option(generations, "generations", 1, 500)
+    if not isinstance(cache_evaluations, bool):
+        raise OptimizerInputError("cache_evaluations must be a boolean")
+    requested_size = (_integer_option(population_size, "population_size", 4)
+                      if population_size is not None else None)
+    requested_steps = (_integer_option(generations, "generations", 1)
+                       if generations is not None else None)
+    checkpoint = Path(checkpoint_path).resolve() if checkpoint_path is not None else None
+    if resume and checkpoint is None:
+        raise OptimizerInputError("resume=True requires checkpoint_path")
+    state = _load_pso_checkpoint(checkpoint) if resume else None
+    from .optimization_budget import resolve_population_budget
+
+    budget = resolve_population_budget(
+        len(initial), requested_size, requested_steps,
+        resumed_population_size=int(state["contract"]["population_size"]) if state else None,
+        completed_generation=int(state["completed_generation"]) if state else 0,
+        saved_generation_target=(state.get("budget", {}).get("effective", {}).get("generations")
+                                 if state and state.get("budget") else None),
+        checkpoint_complete=bool(state.get("complete")) if state else False,
+    )
+    size = budget["effective"]["population_size"]
+    steps = budget["effective"]["generations"]
     if not isinstance(selection, str) or selection not in {"knee", "first_objective"}:
         raise OptimizerInputError("selection must be 'knee' or 'first_objective'")
     try:
@@ -478,16 +509,14 @@ def particle_swarm_optimize(
         if evaluation_batch_size is None
         else _integer_option(evaluation_batch_size, "evaluation_batch_size", 1)
     )
-    checkpoint = Path(checkpoint_path).resolve() if checkpoint_path is not None else None
     evaluation_cache = (
+        None if not cache_evaluations else
         Path(evaluation_cache_directory).resolve()
         if evaluation_cache_directory is not None
         else checkpoint.with_name(f"{checkpoint.name}.evaluations")
         if checkpoint is not None
         else None
     )
-    if resume and checkpoint is None:
-        raise OptimizerInputError("resume=True requires checkpoint_path")
     contract = {
         "optimizer": "particle_swarm_optimize",
         "bounds": np.column_stack((lower, upper)).tolist(),
@@ -542,7 +571,7 @@ def particle_swarm_optimize(
             for local_index, position in enumerate(position_batch):
                 cached = _read_cached_evaluation(
                     evaluation_cache, contract_fingerprint, position
-                )
+                ) if evaluation_cache is not None else None
                 if cached is None:
                     missing_positions.append(position)
                     missing_indices.append(local_index)
@@ -555,10 +584,10 @@ def particle_swarm_optimize(
                         cancellation_check()
                     raw = dict(evaluate(position))
                     raw_batch[local_index] = raw
-                    _write_cached_evaluation(
-                        evaluation_cache, contract_fingerprint, position, raw
-                    )
                     if evaluation_cache is not None:
+                        _write_cached_evaluation(
+                            evaluation_cache, contract_fingerprint, position, raw
+                        )
                         cache_writes += 1
             elif missing_positions:
                 evaluated = list(evaluate_batch(missing_positions))
@@ -571,10 +600,10 @@ def particle_swarm_optimize(
                 ):
                     raw = dict(supplied)
                     raw_batch[local_index] = raw
-                    _write_cached_evaluation(
-                        evaluation_cache, contract_fingerprint, position, raw
-                    )
                     if evaluation_cache is not None:
+                        _write_cached_evaluation(
+                            evaluation_cache, contract_fingerprint, position, raw
+                        )
                         cache_writes += 1
             produced.extend(
                 _candidate_from_raw(
@@ -598,7 +627,6 @@ def particle_swarm_optimize(
     expected_mode = "single_objective" if len(objectives) == 1 else "multi_objective"
     resumed = False
     if resume:
-        state = _load_pso_checkpoint(checkpoint)  # type: ignore[arg-type]
         if state.get("contract_fingerprint") != contract_fingerprint:
             saved_contract = state.get("contract", {})
             changed = [key for key, value in contract.items()
@@ -633,7 +661,12 @@ def particle_swarm_optimize(
                 "remaining_generations": steps - completed_generation,
             },
         )
-    else:
+    _publish_progress(progress_callback, "budget", {
+        "summary": budget["summary"], "budget": budget,
+        "requested_population_size": requested_size, "requested_generations": requested_steps,
+        "population_size": size, "total_generations": steps,
+    })
+    if not resume:
         population = evaluate_population(
             list(positions), list(velocities), list(range(size)), 0
         )
@@ -673,6 +706,7 @@ def particle_swarm_optimize(
                 personal_best=personal_best,
                 global_best=global_best,
                 complete=completed_generation >= steps,
+                budget=budget,
             )
         for generation in range(completed_generation + 1, steps + 1):
             inertia = 0.85 - 0.45 * ((generation - 1) / max(1, steps - 1))
@@ -725,6 +759,7 @@ def particle_swarm_optimize(
                 personal_best=personal_best,
                 global_best=global_best,
                 complete=completed_generation >= steps,
+                budget=budget,
             )
         candidates = personal_best
         front = _first_front(candidates)
@@ -753,6 +788,7 @@ def particle_swarm_optimize(
                 population=population,
                 history=history,
                 complete=completed_generation >= steps,
+                budget=budget,
             )
         for generation in range(completed_generation + 1, steps + 1):
             ranked = _rank_and_crowding(population)
@@ -806,6 +842,7 @@ def particle_swarm_optimize(
                 population=population,
                 history=history,
                 complete=completed_generation >= steps,
+                budget=budget,
             )
         front = _first_front(population)
         candidates = population
@@ -842,9 +879,13 @@ def particle_swarm_optimize(
         "resumed": resumed,
         "completed_generation": completed_generation,
     }
+    result["budget"] = budget
     result["evaluation_cache"] = {
+        "requested": cache_evaluations,
         "enabled": evaluation_cache is not None,
         "directory": str(evaluation_cache) if evaluation_cache is not None else None,
+        "supplied_directory_ignored": not cache_evaluations and evaluation_cache_directory is not None,
+        "generation_checkpoints_retained": checkpoint is not None,
         "hits": cache_hits,
         "writes": cache_writes,
     }

@@ -307,6 +307,7 @@ class ResearchEnvironment:
                 "BRILLIANCE_PYTHON": str(self.python_executable),
                 "PYTHON_EXECUTABLE": str(self.python_executable),
                 "BRILLIANCE_SOURCE_ROOT": str(self.source_root),
+                "BRILLIANCE_RUNTIME_CONFIG": str(self.config_path),
                 "JUTRACK_ROOT": str(self.jutrack_root),
                 "JUTRACK_PYTHON": str(self.pyjutrack_module),
                 "JUTRACK_JL_PROJECT": str(self.julia_project),

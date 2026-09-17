@@ -1,6 +1,143 @@
 # First-use reliability investigation — 2026-09-08
 
-## Current investigation: duplicate results and lost completed work
+Current validation: [API contracts, worker recovery and fresh release trials](reliability_upgrade_20260915.md).
+The entries below are historical investigations, not current release certification.
+They distinguish fresh numerical construction, actual model-driven trials and
+developer-assisted saved-candidate replays; these are different validation scopes.
+
+## 2026-09-13: cell/ring scope handoff, not a JuTrack physics failure
+
+Project `project-35bd9b9c0c89c2` stopped in program `program-d43ea5cc6f7371616895`
+while extracting one cell from `program-a42103ae340b968408f4/cell_best.json`.
+The saved source confirms that file stores ONE 35-element cell, but constructed
+it with `api.lattice(periodicity=32)` and no scope metadata. The extractor tried
+to divide 35 stored elements into 32 cells. The plain ValueError was not sent
+through bounded coding repair. Production optimization had not started.
+
+This was not the only error in the waiting program: its inclusion map selected
+drift lengths but not bend angles despite an exact angle constraint; it also
+excluded only `ID_half` and not `R:ID_half`. The former now fails source preflight
+without starting Julia; incomplete mirror selection is a typed input error.
+Static reconstruction of the intended selection yields 12 outer variables
+(eight drift-length pairs, four bend-angle pairs), five matching variables and
+the default 500-particle/30-generation plan. This verifies setup only.
+
+The application now validates declared scope before new construction, extraction,
+saving and high-level simulation. It retains legacy artifact readability and
+does not infer scope from names or bend angles. Scope errors contain observed
+counts and corrective constructors and enter bounded coding repair. Cell/ring
+constructors own their scope metadata; copying a cell's metadata into an expanded
+ring can no longer mislabel the ring as a cell. Single-cell topology edits update
+the stored element count; full-ring topology changes require a consistent explicit
+partition. Nonuniform rings should be represented as one explicit sequence, not
+claimed to contain an integer partition that their physical rows do not support.
+
+### Actual saved-artifact replay
+
+The opt-in test `tests/test_jutrack_saved_handoff.py` exercised:
+
+load the exact historical file -> explicitly confirmed cell scope -> save/reload ->
+expand full ring -> extract same physical cell -> JuTrack periodic and full-ring
+evaluations -> per-bend radiation reconciliation -> combined optics/lattice plot ->
+progress and final result with real tables/plots.
+
+It passed in 31.56 s using configured Python/Julia/JuTrack. No seed generation,
+optimization, model call, internet search or user-project write occurred. Original
+cell SHA-256 remained `24adfac9e5d7e5c12a5e4f02d35125e0530e6b40e1121daa895ee2a75bd32ca8`.
+Derived files were confined to pytest's temporary workspace.
+
+| Replay measurement | Result |
+|---|---:|
+| Physical elements / expanded ring elements | 35 / 1120 |
+| Cell length / ring length | 25.001172202060822 m / 800.0375104659463 m |
+| Full-ring natural emittance | 8410.827917105 pm rad |
+| ID dispersion / slope | -5.2114778364280794e-5 m / -2.0027882279591118e-16 |
+| Periodic vs full-ring emittance agreement | passed |
+| Per-bend radiation-integral reconciliation | passed |
+
+This is a reproducible **poor prototype**, not a successful low-emittance design.
+Its original construction audit already reported a mismatch with the program's
+exact 25 m cell allocation; that evidence was retained, not hidden by this repair.
+The latest request described nominal circumference, not an approved tolerance interval.
+The replay does not validate autonomous route choice, optimizer convergence or the
+complete first-user design experience. Those require a separate model-driven release
+trial; passing this handoff test must not be advertised as completing that trial.
+
+To repeat this check on a reviewed saved single cell, set `BRILLIANCE_TEST_CELL_PATH`
+and `BRILLIANCE_TEST_CELL_PERIODS`, then run the opt-in test with the configured
+interpreter. Normal test runs skip it; their scope/serialization tests use only
+synthetic rows, not a stored design template.
+
+## 2026-09-12: conventional seed obtained, optimizer setup failed
+
+Branch: `chatgpt/h7ba-radiation-aware-continuation`. Inspected the current project
+`project-351d6c89c016d9`; no previous-project lattice was used or copied.
+
+The latest failure was an execution contract error, not a failed population search.
+Program `program-803692addde6769bbd90` described eight quadrupole-strength pairs and
+eight drift-length pairs (16 outer knobs), but requested both `length_m` and `k1_m2`
+on all selected elements. This additionally freed eight quad-length pairs: 24 knobs.
+Its 160 particles violated its own ten-particles-per-knob minimum of 240. No production
+generation ran. The callback also checked beta only at the ID, not over the cell.
+
+Earlier program `program-b2aec96a99378e7cd26e` called `run.finish` in its unsuccessful
+terminal-match branch without exiting. Later statements overwrote that evidence with
+a different result. Some subsequent trials attempted hybrid shaping even though the
+request was for a conventional starting design. Fixed-geometry transfer failures did
+not establish that conventional matching was impossible: releasing drift allocation
+subsequently yielded a feasible periodic cell.
+
+Application repairs:
+
+- Pure-Python `plan_lattice_optimization` reports actual compiled field ownership and
+  population requirements before simulation setup. Explicit undersized budgets are
+  repairable input errors, not silently increased or treated as physics infeasibility.
+- `included_element_names_by_field` selects explicit, globally mirrored element/field
+  pairs. Unlisted fields stay fixed; invalid names, incomplete pairs and conflicting
+  inclusions fail explicitly. The old inference mode remains supported.
+- Other nested-optimizer setup guards now use typed input errors. Bounded repair also
+  recognizes the exact archived population/generation-policy errors and directs the
+  model to verify intended ownership, retaining the saved candidate and machine limits.
+- Source preflight rejects a normal path that can overwrite an earlier final result.
+  `finish` retains its existing API; early exits must explicitly stop execution.
+- MBA-specific guidance remains in the expert module: diagnose a failed terminal
+  transfer, release provisional geometry, and allow complete-cell matching without
+  preserving isolated-unit optics. Do not invoke hybrid shaping as infrastructure repair.
+  The working modified-TME method and JuTrack implementation were not rewritten.
+
+### Verification and limits
+
+Replayed the exact saved candidate, without changing its JSON or running optimization:
+
+`research_projects/project-351d6c89c016d9/workspace/artifacts/programs/program-b61b7af6939c18cd6f3e/candidate_lattice.json`
+
+SHA-256: `d3546d6648e5e64bc16b6a41371064062d4208a6623ab1381c0aaf88cac52f8b`.
+
+| Measured with configured JuTrack | Result |
+|---|---:|
+| Energy / intended periods | 3.5 GeV / 32 |
+| Physical elements / positive bends per cell | 77 / 7 |
+| Cell length / bend angle | 25 m / 0.19634954084936207 rad |
+| Periodic stability / radiation-validity gate | passed / passed |
+| Natural emittance (periodic radiation calculation) | 600.6480074984273 pm rad |
+| Horizontal damping partition | 0.9993118465836074 |
+| ID Dx / Dpx | -1.7306391808301312e-9 m / -2.6216651102693904e-16 |
+| Maximum beta over element-boundary samples | 72.50888202364553 m |
+
+Static replay of the actual saved setup reproduces 24 knobs and the population error;
+explicit selection matching the program's stated intent yields 16 outer and six inner
+knobs, with a valid 160-particle setup. These are setup checks, not optimization results.
+The new source check detects both possible result overwrites in the archived terminal program.
+Regression tests use synthetic rows/algebraic callbacks, not a solved research lattice.
+
+No new model-driven end-to-end design, TME regeneration, production optimization, independent
+full-ring revalidation, chromatic correction, tracking, or internet search was performed in
+this audit. The replay establishes a reproducible conventional **seed**, not a fourth-generation
+operational design or a demonstrated emittance target. User project files and the user-modified
+JuTrack submodule were preserved. Earlier investigations below are historical, not validation
+of this branch's current end-to-end autonomous behavior.
+
+## Earlier investigation: duplicate results and lost completed work
 
 The user's latest project, `research_projects/project-48d7a958155666`, did finish
 its 40-generation, 2,460-evaluation unit search. Reporting then failed on a wrong

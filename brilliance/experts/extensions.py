@@ -35,6 +35,8 @@ class ExpertPythonTool:
     name: str
     function: Callable[..., Any]
     legacy_names: tuple[str, ...] = ()
+    discoverable: bool = True
+    durable: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -42,16 +44,19 @@ class ExpertPythonTool:
             "signature": str(inspect.signature(self.function)),
             "description": inspect.getdoc(self.function) or "",
             "legacy_names": list(self.legacy_names),
+            "discoverable": self.discoverable,
+            "durable": self.durable,
         }
 
 
 class ExpertPythonLibrary:
     """Read-only namespace exposing only explicitly registered module functions."""
 
-    __slots__ = ("_functions",)
+    __slots__ = ("_functions", "_discoverable")
 
     def __init__(self, tools: tuple[ExpertPythonTool, ...]):
         object.__setattr__(self, "_functions", MappingProxyType({item.name: item.function for item in tools}))
+        object.__setattr__(self, "_discoverable", tuple(item.name for item in tools if item.discoverable))
 
     def __getattr__(self, name: str) -> Callable[..., Any]:
         try:
@@ -63,7 +68,7 @@ class ExpertPythonLibrary:
         raise AttributeError("expert Python libraries are read-only")
 
     def __dir__(self):
-        return sorted(self._functions)
+        return sorted(self._discoverable)
 
 
 def discover_extensions(module: ExpertModule) -> tuple[tuple[ExpertAcceptanceCheck, ...], tuple[ExpertPythonTool, ...]]:
@@ -85,5 +90,7 @@ def discover_extensions(module: ExpertModule) -> tuple[tuple[ExpertAcceptanceChe
             ))
         metadata = getattr(function, "__brilliance_python_tool__", None)
         if isinstance(metadata, Mapping):
-            functions.append(ExpertPythonTool(name, function, tuple(metadata.get("legacy_names", ()))))
+            functions.append(ExpertPythonTool(name, function, tuple(metadata.get("legacy_names", ())),
+                                             bool(metadata.get("discoverable", True)),
+                                             bool(metadata.get("durable", False))))
     return tuple(checks), tuple(functions)

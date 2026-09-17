@@ -1,82 +1,66 @@
-"""Public MBA capabilities, discovered from this expert package without core edits.
-
-These tools accept ordinary Python lattice objects and arrays. They are used by
-research programs through api.expert_module("laboratory.mba_design"). The legacy
-names keep archived programs reproducible while this module remains installed.
-"""
+"""Small MBA physics/measurement tools; scientific programs belong in projects."""
 
 from brilliance.expert_sdk import acceptance, python_tool
 
 from .acceptance import (
-    HYBRID_INSTRUCTIONS,
-    HYBRID_SHAPE,
-    hybrid_optimization_warnings,
-    is_hybrid_shape_request,
+    CONVENTIONAL_LINEAR,
+    CONVENTIONAL_LINEAR_INSTRUCTIONS,
+    HYBRID_LINEAR,
+    HYBRID_LINEAR_INSTRUCTIONS,
+    MBA_OPTIMIZATION,
+    MBA_OPTIMIZATION_INSTRUCTIONS,
+    is_conventional_mba_design_request,
+    is_hybrid_linear_request,
+    is_mba_emittance_optimization_request,
 )
-from .hybrid_regions import HybridMBARegionalGeometry as _HybridMBARegionalGeometry
-from .hybrid_regions import hybrid_mba_regions as _hybrid_mba_regions
-from .outer_dba import HybridMBAOuterReplacement as _HybridMBAOuterReplacement
-from .outer_dba import build_outer_dba_section as _build_outer_dba_section
-from .outer_dba import match_outer_dba_section as _match_outer_dba_section
-from .hybrid_continuation import explore_hybrid_mba as _explore_hybrid_mba
-from .hybrid_optics import measure_core_optics as _measure_core_optics
-from .hybrid_optics import compare_core_optics as _compare_core_optics
-from .hybrid_response import (
-    HybridMBAShapeEvaluator as _HybridMBAShapeEvaluator,
-)
-from .hybrid_response import (
-    hybrid_mba_quadrupole_knobs as _hybrid_mba_quadrupole_knobs,
-)
+from .conventional_claims import validate_conventional_linear, verify_conventional_candidate
+from .hmba_chromatic import solve_chromatic_correction
+from .hybrid_measurement import HybridMeasurement
 from .hybrid_shape import (
-    evaluate_hybrid_mba_shape as _evaluate_hybrid_mba_shape,
+    evaluate_hybrid_mba_shape,
+    hybrid_mba_bend_roles,
+    hybrid_mba_shape_diagnostics,
+    validate_hybrid_mba_shape_report,
 )
-from .hybrid_shape import (
-    hybrid_mba_bend_roles as _hybrid_mba_bend_roles,
-)
-from .hybrid_shape import (
-    hybrid_mba_shape_diagnostics as _hybrid_mba_shape_diagnostics,
-)
-from .hybrid_shape import (
-    validate_hybrid_mba_shape_report as _validate_hybrid_mba_shape_report,
-)
-from .periodic_hybrid import match_periodic_hybrid as _match_periodic_hybrid
-from .physics_references import (
-    TMECellTargets as _TMECellTargets,
-)
-from .physics_references import (
-    homogeneous_bend_tme_reference as _homogeneous_bend_tme_reference,
-)
-from .physics_references import (
-    tme_targets as _tme_targets,
-)
+from .outcome_claims import validate_hmba_linear, validate_mba_optimization, verify_hmba_candidate
+from .outer_units import assemble_mba_outer_units, match_mba_outer_units, mba_outer_unit_knobs
+from .physics_references import TMECellTargets, homogeneous_bend_tme_reference, tme_targets
+from .radiation_reporting import mba_radiation_report
+from .tme_geometry import optimize_tme_unit_geometry
+from .tme_unit import design_tme_unit
 
-TMECellTargets = python_tool(legacy_names=("TMECellTargets",))(_TMECellTargets)
-tme_targets = python_tool(legacy_names=("tme_targets",))(_tme_targets)
-homogeneous_bend_tme_reference = python_tool(legacy_names=("homogeneous_bend_tme_reference",))(_homogeneous_bend_tme_reference)
-hybrid_mba_bend_roles = python_tool(legacy_names=("hybrid_mba_bend_roles",))(_hybrid_mba_bend_roles)
-hybrid_mba_shape_diagnostics = python_tool(legacy_names=("hybrid_mba_shape_diagnostics",))(_hybrid_mba_shape_diagnostics)
-evaluate_hybrid_mba_shape = python_tool(legacy_names=("evaluate_hybrid_mba_shape",))(_evaluate_hybrid_mba_shape)
-validate_hybrid_mba_shape_report = python_tool()(_validate_hybrid_mba_shape_report)
-HybridMBAShapeEvaluator = python_tool()(_HybridMBAShapeEvaluator)
-hybrid_mba_quadrupole_knobs = python_tool()(_hybrid_mba_quadrupole_knobs)
-HybridMBARegionalGeometry = python_tool()(_HybridMBARegionalGeometry)
-hybrid_mba_regions = python_tool()(_hybrid_mba_regions)
-HybridMBAOuterReplacement = python_tool()(_HybridMBAOuterReplacement)
-build_outer_dba_section = python_tool()(_build_outer_dba_section)
-match_outer_dba_section = python_tool()(_match_outer_dba_section)
-explore_hybrid_mba = python_tool()(_explore_hybrid_mba)
-match_periodic_hybrid = python_tool()(_match_periodic_hybrid)
-measure_core_optics = python_tool()(_measure_core_optics)
-compare_core_optics = python_tool()(_compare_core_optics)
+TMECellTargets = python_tool()(TMECellTargets)
+tme_targets = python_tool()(tme_targets)
+design_tme_unit = python_tool(durable=True)(design_tme_unit)
+optimize_tme_unit_geometry = python_tool(durable=True)(optimize_tme_unit_geometry)
+assemble_mba_outer_units = python_tool()(assemble_mba_outer_units)
+mba_outer_unit_knobs = python_tool()(mba_outer_unit_knobs)
+match_mba_outer_units = python_tool(durable=True)(match_mba_outer_units)
+homogeneous_bend_tme_reference = python_tool()(homogeneous_bend_tme_reference)
+mba_radiation_report = python_tool()(mba_radiation_report)
+HybridMeasurement = python_tool()(HybridMeasurement)
+hybrid_mba_bend_roles = python_tool()(hybrid_mba_bend_roles)
+hybrid_mba_shape_diagnostics = python_tool()(hybrid_mba_shape_diagnostics)
+evaluate_hybrid_mba_shape = python_tool()(evaluate_hybrid_mba_shape)
+validate_hybrid_mba_shape_report = python_tool()(validate_hybrid_mba_shape_report)
+solve_chromatic_correction = python_tool()(solve_chromatic_correction)
+verify_hmba_candidate = python_tool()(verify_hmba_candidate)
+verify_conventional_candidate = python_tool()(verify_conventional_candidate)
 
 
-@acceptance(
-    id=HYBRID_SHAPE,
-    applies_to=is_hybrid_shape_request,
-    instructions=HYBRID_INSTRUCTIONS,
-    preflight=hybrid_optimization_warnings,
-    requires_lattice=True,
-)
-def hybrid_shape_acceptance(report, lattice) -> list[str]:
-    """Validate complete-cell hybrid shape evidence against its archived candidate."""
-    return _validate_hybrid_mba_shape_report(report, lattice)
+@acceptance(id=CONVENTIONAL_LINEAR, applies_to=is_conventional_mba_design_request,
+            instructions=CONVENTIONAL_LINEAR_INSTRUCTIONS, requires_lattice=True)
+def conventional_linear_acceptance(report, lattice):
+    return validate_conventional_linear(report, lattice)
+
+
+@acceptance(id=HYBRID_LINEAR, applies_to=is_hybrid_linear_request,
+            instructions=HYBRID_LINEAR_INSTRUCTIONS, requires_lattice=True)
+def hybrid_linear_acceptance(report, lattice):
+    return validate_hmba_linear(report, lattice)
+
+
+@acceptance(id=MBA_OPTIMIZATION, applies_to=is_mba_emittance_optimization_request,
+            instructions=MBA_OPTIMIZATION_INSTRUCTIONS, requires_lattice=True)
+def mba_optimization_acceptance(report, lattice):
+    return validate_mba_optimization(report, lattice)

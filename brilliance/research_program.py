@@ -6,6 +6,7 @@ import ast
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -21,9 +22,6 @@ from .public_api_lint import lint_public_api_calls
 
 MAX_RESEARCH_PROGRAM_BYTES = 128_000
 MAX_RESEARCH_PROGRAM_LINES = 600
-_POPULATION_OPTIMIZER_CALLS = frozenset(
-    {"optimize_lattice_parameters", "particle_swarm_optimize"}
-)
 _LATTICE_PRODUCING_CALLS = frozenset({
     "lattice",
     "periodic_cell",
@@ -32,6 +30,7 @@ _LATTICE_PRODUCING_CALLS = frozenset({
     "bounded_fast_response_match",
     "continuation_match",
     "optimize_lattice_parameters",
+    "match_jutrack_line",
     "insert_element_in_drift",
     "insert_element_between",
     "remove_inserted_element",
@@ -50,6 +49,43 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _research_failure_context(stderr: str) -> str:
+    """Keep the Python cause ahead of trailing native shutdown noise.
+
+    Raw stderr remains archived. This bounded excerpt is used by both the
+    scientist-facing error and the narrow coding-error recovery classifier.
+    """
+    limit = 4000
+    marker = "Traceback (most recent call last):"
+    locals_match = re.search(r"(?m)^BRILLIANCE_FAILURE_LOCALS=[^\r\n]*", stderr)
+    diagnostic = stderr[:locals_match.start()] if locals_match else stderr
+    start = diagnostic.rfind(marker)
+    if start >= 0:
+        traceback = diagnostic[start:]
+        exception = re.search(r"(?m)^(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?::[^\r\n]*)?\r?$", traceback)
+        if exception:
+            # Preserve the exception TYPE and the final calling frame even if
+            # the traceback or exception message exceeds the display budget.
+            terminal = exception.group(0).rstrip("\r")[:1000]
+            frames = traceback[:exception.start()].rstrip()
+            room = limit - len(terminal) - 1
+            if len(frames) > room:
+                prefix = marker + "\n... earlier frames omitted; see archived stderr ...\n"
+                frames = prefix + frames[-(room - len(prefix)):]
+            selected = frames + "\n" + terminal
+            if locals_match and len(selected) + len(locals_match.group(0)) + 1 <= limit:
+                selected += "\n" + locals_match.group(0)
+            return selected
+    # Native aborts or incomplete tracebacks may lack a Python exception line.
+    # Retain both ends rather than replacing an early failure with late noise.
+    text = stderr.strip()
+    if len(text) <= limit:
+        return text or "No stderr output; see the archived stdout and process exit code."
+    separator = "\n... diagnostic truncated; see archived stderr ...\n"
+    head = (limit - len(separator)) // 2
+    return text[:head] + separator + text[-(limit - len(separator) - head):]
 
 
 def _workspace_path(workspace: Path, value: str, *, suffix: str | None = None) -> Path:
@@ -103,11 +139,12 @@ def _contains_finish_call(node: ast.AST) -> bool:
 
 
 def _normal_finish_states(
-    statements: list[ast.stmt], incoming: set[bool] | None = None
+    statements: list[ast.stmt], incoming: set[bool] | None = None,
+    *, issues: list[str] | None = None,
 ) -> set[bool]:
     """Conservatively track finish calls along normal top-level control-flow paths."""
 
-    states = set(incoming or {False})
+    states = set({False} if incoming is None else incoming)
     for statement in statements:
         if not states:
             break
@@ -115,37 +152,44 @@ def _normal_finish_states(
             states = set()
             continue
         if isinstance(statement, ast.If):
-            body = _normal_finish_states(statement.body, states)
+            body = _normal_finish_states(statement.body, states, issues=issues)
             alternate = (
-                _normal_finish_states(statement.orelse, states)
+                _normal_finish_states(statement.orelse, states, issues=issues)
                 if statement.orelse
                 else set(states)
             )
             states = body | alternate
             continue
         if isinstance(statement, (ast.With, ast.AsyncWith)):
-            states = _normal_finish_states(statement.body, states)
+            states = _normal_finish_states(statement.body, states, issues=issues)
             continue
         if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
             # A loop may execute zero times, so retain the incoming path too.
-            states |= _normal_finish_states(statement.body, states)
+            states |= _normal_finish_states(statement.body, states, issues=issues)
             if statement.orelse:
-                states = _normal_finish_states(statement.orelse, states)
+                states = _normal_finish_states(statement.orelse, states, issues=issues)
             continue
         if isinstance(statement, ast.Try):
-            paths = _normal_finish_states(statement.body, states)
+            paths = _normal_finish_states(statement.body, states, issues=issues)
             for handler in statement.handlers:
-                paths |= _normal_finish_states(handler.body, states)
+                paths |= _normal_finish_states(handler.body, states, issues=issues)
             if statement.orelse:
-                paths = _normal_finish_states(statement.orelse, paths)
+                paths = _normal_finish_states(statement.orelse, paths, issues=issues)
             if statement.finalbody:
-                paths = _normal_finish_states(statement.finalbody, paths)
+                paths = _normal_finish_states(statement.finalbody, paths, issues=issues)
             states = paths
             continue
         # Definitions do not execute their bodies at definition time. For all
         # other simple statements, a finish call is on the current normal path.
         if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if _contains_finish_call(statement):
+                if True in states and issues is not None:
+                    issues.append(
+                        f"line {statement.lineno}: run.finish may overwrite an earlier result on "
+                        "the same execution path. finish saves a result; it does not exit Python. "
+                        "After an early finish, use raise SystemExit(0) at program scope, or "
+                        "return from the enclosing stage function. Use progress for intermediate results."
+                    )
                 states = {True for _state in states}
     return states
 
@@ -181,11 +225,13 @@ def inspect_research_program(workspace: Path | str, script: str, *, expert_regis
         except (OSError, UnicodeError, SyntaxError) as exc:
             issues.append(f"research program source is not valid UTF-8 Python: {exc}")
     calls: set[str] = set()
+    return_contracts: dict[str, Any] = {}
     finish_publishes_candidate = False
     if tree is not None:
         issues.extend(lint_jutrack_api(tree))
         issues.extend(lint_worker_factory_captures(tree))
-        issues.extend(lint_public_api_calls(tree, registry=expert_registry, project_directory=root.parent))
+        issues.extend(lint_public_api_calls(tree, registry=expert_registry, project_directory=root.parent,
+                                           return_contracts=return_contracts))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -204,7 +250,7 @@ def inspect_research_program(workspace: Path | str, script: str, *, expert_regis
             issues.append("research program must call open_research_run()")
         if "finish" not in calls:
             issues.append("research program must call run.finish(...) on every bounded outcome")
-        elif isinstance(tree, ast.Module) and False in _normal_finish_states(tree.body):
+        elif isinstance(tree, ast.Module) and False in _normal_finish_states(tree.body, issues=issues):
             issues.append(
                 "a normal top-level path can end without run.finish(...); add one final "
                 "unconditional call or finish every branch"
@@ -214,6 +260,13 @@ def inspect_research_program(workspace: Path | str, script: str, *, expert_regis
                 "a lattice-producing or lattice-modifying stage must preserve its exact state: "
                 "pass candidate_lattice=... explicitly to run.finish(...) on the candidate branch"
             )
+    from .experts import ExpertRegistry
+    registry = expert_registry
+    if registry is None and "expert_module" in calls:
+        registry = ExpertRegistry.current()
+    durable_calls = calls & set(getattr(registry, "durable_python_calls", ()))
+    from .result_contracts import compact_return_contracts
+    contracts, omitted_contracts = compact_return_contracts(return_contracts)
     return {
         "passed": not issues,
         "source": (
@@ -226,6 +279,10 @@ def inspect_research_program(workspace: Path | str, script: str, *, expert_regis
         "source_lines": source_lines,
         "issues": issues,
         "detected_calls": sorted(calls),
+        "installed_return_contracts": contracts,
+        "omitted_return_contracts": omitted_contracts,
+        "durable_required": bool(durable_calls),
+        "durable_expert_calls": sorted(durable_calls),
         "has_progress": "progress" in calls,
         "contract": f"saved_research_program_source/{JUTRACK_API_CONTRACT_VERSION}",
     }
@@ -245,13 +302,6 @@ def run_research_program(
             f"research program violates JuTrack API contract "
             f"{JUTRACK_API_CONTRACT_VERSION} or failed source preflight:\n- "
             + "\n- ".join(str(item) for item in inspection["issues"])
-        )
-    if bool(arguments.get("require_optimizer_evidence", False)) and not (
-        set(inspection.get("detected_calls", ())) & _POPULATION_OPTIMIZER_CALLS
-    ):
-        raise ValueError(
-            "explicit optimization execution requires api.optimize_lattice_parameters or "
-            "api.particle_swarm_optimize in the saved program"
         )
     supplied = arguments.get("arguments", {})
     if not isinstance(supplied, Mapping):
@@ -326,8 +376,12 @@ def run_research_program(
             "PYTHONUNBUFFERED": "1",
         }
     )
-    if bool(arguments.get("require_optimizer_evidence", False)):
-        environment["BRILLIANCE_REQUIRE_OPTIMIZER_EVIDENCE"] = "1"
+    # Only the caller's explicit requirement belongs to this invocation. Never
+    # infer execution from an optimizer name in source or inherit a prior job's
+    # completion requirement into an unrelated scientific probe.
+    environment["BRILLIANCE_REQUIRE_OPTIMIZER_EVIDENCE"] = (
+        "1" if bool(arguments.get("require_optimizer_evidence", False)) else "0"
+    )
     if cancel_file is not None:
         environment["BRILLIANCE_RUN_CANCEL"] = str(cancel_file)
     if active_lattice_file is not None:
@@ -430,7 +484,7 @@ def run_research_program(
     stderr = stderr_file.read_text(encoding="utf-8", errors="replace")
     if process.returncode != 0:
         raise RuntimeError(
-            f"research program exited with code {process.returncode}: {stderr[-4000:]}\n"
+            f"research program exited with code {process.returncode}: {_research_failure_context(stderr)}\n"
             f"Exact archived output directory: {output}\n"
             f"Stdout: {stdout_file}\nStderr: {stderr_file}"
         )
@@ -459,6 +513,79 @@ def run_research_program(
             json.loads(candidate_path.read_text(encoding="utf-8"))
         ).as_dict()
         candidate_artifact = str(candidate_path)
+        from .candidate_evidence import (
+            compare_declared_candidate_metrics,
+            compare_declared_geometry,
+            geometry_snapshot,
+            validate_saved_candidate_evaluation,
+        )
+        snapshot_check = validate_saved_candidate_evaluation(
+            candidate, result.get("candidate_evaluation"), output)
+        declared_data = result.get("data", {})
+        declared_data = dict(declared_data) if isinstance(declared_data, Mapping) else {}
+        metric_check = compare_declared_candidate_metrics(declared_data, snapshot_check)
+        # Recompute from saved rows: a program can write result.json directly
+        # or alter a previously emitted geometry table after finish().
+        geometry_report = geometry_snapshot(candidate)
+        declared_tables = result.get("tables", [])
+        declared_tables = declared_tables if isinstance(declared_tables, list) else []
+        geometry_check = compare_declared_geometry(declared_data, geometry_report, tables=declared_tables)
+        unverified_geometry = geometry_check.get("unverified_claims", [])
+        geometry_pending = not geometry_check["passed"] or bool(unverified_geometry)
+        result = dict(result)
+        result["data"] = {**declared_data, "candidate_geometry": geometry_report,
+                          "geometry_metric_comparison": geometry_check}
+        if geometry_pending:
+            result["data"]["submitted_presentation"] = {
+                "summary": result.get("summary"), "tables": declared_tables}
+            if not geometry_check["passed"]:
+                result["summary"] = (
+                    "Candidate preserved, but its reported geometry needs correction. "
+                    "The exact row-derived dimensions are shown below; no design completion is claimed.")
+                retained_tables = []
+            else:
+                result["summary"] = (
+                    "Candidate preserved, but some geometry tables are not bound to its exact snapshot. "
+                    "The verified row-derived dimensions are shown below; the report remains pending.")
+                quarantined = {item.get("table_index") for item in unverified_geometry}
+                retained_tables = [table for index, table in enumerate(declared_tables)
+                    if index not in quarantined and not (
+                        isinstance(table, Mapping) and table.get("kind") == "candidate_geometry"
+                        and table.get("lattice_id") == geometry_report["candidate_lattice_id"])]
+            result["tables"] = [geometry_report["table"], *retained_tables]
+        else:
+            result["tables"] = [geometry_report["table"], *[
+                table for table in declared_tables
+                if not (isinstance(table, Mapping) and table.get("kind") == "candidate_geometry"
+                        and table.get("lattice_id") == geometry_report["candidate_lattice_id"])]]
+        if not snapshot_check["passed"] or not metric_check["passed"] or geometry_pending:
+            # A well-formed saved branch is still useful. Missing lineage must
+            # never advance state, even if a program bypassed ResearchRun.finish.
+            result["use_as_working_lattice"] = False
+            result["request_satisfied"] = False
+            if result.get("scientific_passed") is True:
+                result["scientific_passed"] = None
+            if result.get("status") == "completed":
+                result["status"] = "partial"
+            result["candidate_handoff"] = {"disposition": "archived_branch",
+                                            "selection_requires_validated_execution": True}
+            prior_limitations = result.get("limitations", [])
+            limitations = list(prior_limitations) if isinstance(prior_limitations, list) else []
+            if not snapshot_check["passed"]:
+                limitations.extend([*snapshot_check["issues"], snapshot_check["next_action"]])
+            if not metric_check["passed"]:
+                limitations.extend(["Program summary differs from the exact candidate metrics.",
+                                    metric_check["next_action"]])
+            if geometry_pending:
+                limitations.append(geometry_check.get("next_action") or (
+                    "Bind current geometry tables to the exact candidate and identify targets separately. "
+                    "Correct the report without rerunning matching or optimization."))
+            result["limitations"] = limitations
+            result["data"].update(candidate_verification=snapshot_check,
+                                  candidate_metric_comparison=metric_check)
+    from .scientific_reporting import normalize_scientific_outcome
+
+    result = normalize_scientific_outcome(result)
     advance = (
         bool(result.get("use_as_working_lattice"))
         and result.get("scientific_passed") is True
@@ -617,6 +744,34 @@ def validate_research_program(
     request_satisfied = result.get("request_satisfied")
     if request_satisfied is not None and not isinstance(request_satisfied, bool):
         issues.append("request_satisfied must be true, false, or null")
+    candidate_verification = None
+    candidate_metric_comparison = None
+    candidate_geometry = None
+    geometry_metric_comparison = None
+    working_lattice_requested = result.get("use_as_working_lattice") is True
+    if candidate is not None:
+        from .candidate_evidence import (
+            compare_declared_candidate_metrics,
+            compare_declared_geometry,
+            geometry_snapshot,
+            validate_saved_candidate_evaluation,
+        )
+        candidate_verification = validate_saved_candidate_evaluation(
+            candidate, result.get("candidate_evaluation"), output)
+        declared_data = result.get("data", {})
+        candidate_metric_comparison = compare_declared_candidate_metrics(
+            declared_data if isinstance(declared_data, Mapping) else {}, candidate_verification)
+        candidate_geometry = geometry_snapshot(candidate)
+        geometry_metric_comparison = compare_declared_geometry(
+            declared_data if isinstance(declared_data, Mapping) else {}, candidate_geometry, tables=tables)
+        if (not candidate_verification["passed"] or not candidate_metric_comparison["passed"]
+                or not geometry_metric_comparison["passed"]
+                or geometry_metric_comparison.get("unverified_claims")):
+            # This is unverified scientific provenance, not an execution error.
+            request_satisfied = False
+            working_lattice_requested = False
+            if scientific_passed is True:
+                scientific_passed = None
     from .scientific_acceptance import (
         assess_scientific_acceptance,
         compact_scientific_acceptance,
@@ -643,6 +798,7 @@ def validate_research_program(
                 registry = load_expert_registry()
         acceptance_check = assess_scientific_acceptance(
             acceptance.get("reports"), required=required, lattice=candidate,
+            evidence_directory=output,
             registry=registry,
         )
     except (TypeError, ValueError) as exc:
@@ -653,7 +809,7 @@ def validate_research_program(
         # a coding exception. Only a conflicting success/promotion claim is wrong.
         if request_satisfied is True:
             issues.append("request_satisfied=true conflicts with failed scientific acceptance")
-        if result.get("use_as_working_lattice") is True:
+        if working_lattice_requested:
             issues.append("working-lattice promotion conflicts with failed scientific acceptance")
         request_satisfied = False
     data = result.get("data", {}) if isinstance(result.get("data"), Mapping) else {}
@@ -680,6 +836,10 @@ def validate_research_program(
             request_satisfied if isinstance(request_satisfied, bool) else None
         ),
         "scientific_acceptance": compact_scientific_acceptance(acceptance_check),
+        "candidate_verification": candidate_verification,
+        "candidate_metric_comparison": candidate_metric_comparison,
+        "candidate_geometry": candidate_geometry,
+        "geometry_metric_comparison": geometry_metric_comparison,
         "validator": "saved_research_program_contract_v1",
         "issues": issues,
         "checked_values": {
@@ -689,6 +849,11 @@ def validate_research_program(
             "plot_count": len(plots),
             "download_count": len(downloads),
             "candidate_lattice_id": checked_lattice_id,
+            "candidate_evaluation_verified": (
+                candidate_verification["passed"] if candidate_verification else None),
+            "candidate_geometry_consistent": (
+                geometry_metric_comparison["passed"] and not geometry_metric_comparison.get("unverified_claims")
+                if geometry_metric_comparison else None),
         },
         "claim_authority": (
             "Program provenance and output structure are validated. Scientific authority comes "

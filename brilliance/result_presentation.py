@@ -89,22 +89,46 @@ def _has_bend_table(tables: list[dict[str, Any]]) -> bool:
 
 
 def present_candidate_evidence(candidate: Any, output: Path, *,
-                               tables: list[dict[str, Any]], plots: list[dict[str, Any]]) -> dict[str, Any]:
+                               tables: list[dict[str, Any]], plots: list[dict[str, Any]],
+                               candidate_receipt: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Attach canonical views only from evidence for this exact lattice id.
 
     Explicit plots are respected. Callers can identify an explicit per-bend
     table using ``kind='bend_radiation'`` or the raw bend/I2/I5 columns. Missing
     evidence is reported, not manufactured by recalculation or interpolation.
+    The selected verified archive, not the transient optimizer cache, owns its
+    optics. Reading that archive checks its hash, scope and exact candidate rows.
     """
     if _active_scope() != str(output.resolve()):
         return {"status": "unavailable", "reason": "No evidence captured in this program."}
+    if candidate_receipt is not None:
+        from .candidate_evidence import read_numerical_evidence
+
+        try:
+            measured = read_numerical_evidence(candidate, candidate_receipt, output_directory=output)
+            linear = measured.get("linear_optics")
+            remember_candidate_evidence(candidate, linear=linear)
+            retained = _evidence.get(candidate.lattice_id)
+            if retained is not None and isinstance(linear, Mapping) and linear.get("twiss_profile"):
+                retained["optics_receipt"] = copy.deepcopy(json_safe(candidate_receipt))
+        except Exception as exc:
+            # Keep the numerical checkpoint. Never fall back to caller-provided
+            # curves or another simulation when the selected archive cannot be read.
+            error = f"Archived optics presentation unavailable: {type(exc).__name__}: {exc}"
+            return {"status": "unavailable", "reason": error, "errors": [error],
+                    "simulation_rerun": False}
     record = _evidence.get(candidate.lattice_id)
     if not record:
         return {"status": "unavailable", "reason": "This exact candidate has no retained optics or per-bend evidence."}
     from .accelerator_api import save_bend_radiation_contribution_plot, save_optics_lattice_plot
 
     evidence_path = output / "computed_presentation.json"
-    evidence_path.write_text(json.dumps(json_safe(record), ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        evidence_path.write_text(json.dumps(json_safe(record), ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        error = f"Presentation archive unavailable: {type(exc).__name__}: {exc}"
+        return {"status": "unavailable", "reason": error, "errors": [error],
+                "simulation_rerun": False}
     generated: list[str] = []
     failures: list[str] = ([f"Optics presentation unavailable: {record['optics_unavailable']}"]
                            if record.get("optics_unavailable") else [])

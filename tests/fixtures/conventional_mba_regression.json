@@ -1,0 +1,129 @@
+{
+  "schema": "conventional_mba_regression/v1",
+  "purpose": "Test-only reproduction of a specific historical conventional candidate; never an expert design seed or a runtime design template.",
+  "project_workspace": "research_projects/project-351d6c89c016d9/workspace",
+  "selected_program": "artifacts/programs/program-b61b7af6939c18cd6f3e",
+  "parent_program": "artifacts/programs/program-68f325a39426e3cae101",
+  "lattice_id": "lattice-6224380f8d8b7280",
+  "parent_lattice_id": "lattice-3ea11d269033c778",
+  "artifact_sha256": {
+    "artifacts/programs/program-b61b7af6939c18cd6f3e/candidate_lattice.json": "d3546d6648e5e64bc16b6a41371064062d4208a6623ab1381c0aaf88cac52f8b",
+    "artifacts/programs/program-b61b7af6939c18cd6f3e/program.py": "092d2dad0c0a3c70b3eaf59689b49f317274d68ec28e92d1ba46ca0f1a8bc0fd",
+    "artifacts/programs/program-b61b7af6939c18cd6f3e/arguments.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "artifacts/programs/program-68f325a39426e3cae101/candidate_lattice.json": "452618313e68dc8eb94eb1ee600c8b911aca2d51addddbc578a4bca0cc6d5329",
+    "artifacts/programs/program-68f325a39426e3cae101/program.py": "18fa8510b2cd963939f947bd492d59da6e53ce7efb4b016fefa6cccf2ddcb9f6",
+    "artifacts/programs/program-68f325a39426e3cae101/arguments.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+  },
+  "geometry": {
+    "energy_gev": 3.5,
+    "periods": 32,
+    "elements_per_cell": 77,
+    "positive_bends_per_cell": 7,
+    "cell_length_m": 25.0,
+    "circumference_m": 800.0,
+    "cell_bend_angle_rad": 0.19634954084936207,
+    "insertion_straight_m": 6.0
+  },
+  "magnet_limits_from_source_defaults": {
+    "dipole_field_t": 1.2,
+    "quadrupole_pole_tip_field_t": 0.8,
+    "sextupole_pole_tip_field_t": 0.6,
+    "quadrupole_radius_m": 0.02,
+    "sextupole_radius_m": 0.02,
+    "max_abs_k1_m2": 3.4261995199999995
+  },
+  "original_achromat_requirements": {
+    "id_dispersion_tolerance_m": 0.0001,
+    "id_slope_tolerance": 0.0001
+  },
+  "regression_tolerances": {
+    "geometry_absolute": 1e-10,
+    "row_field_absolute": 1e-14,
+    "optics_relative": 1e-6,
+    "optics_absolute": 1e-9,
+    "radiation_relative": 1e-7,
+    "radiation_absolute": 1e-13,
+    "emittance_absolute_pm": 0.0001,
+    "dispersion_reproduction_absolute_m": 1e-9,
+    "slope_reproduction_absolute": 1e-10
+  },
+  "reconstruction": {
+    "method": "Extract only the hash-pinned saved build_rows function, compile the same mirror KQUAD parameterization on its exact source parent, and apply the recorded selected strengths and already-projected drift deltas. Never execute imports, scipy least_squares, random sampling or top-level saved program code.",
+    "quadrupole_pairs": [
+      {"left": "LEFT:QM4", "right": "QM4", "k1_m2": 2.601908127441462},
+      {"left": "LEFT:QM3", "right": "QM3", "k1_m2": -1.6462891549225096},
+      {"left": "LEFT:QM2", "right": "QM2", "k1_m2": -2.8835595482636434},
+      {"left": "LEFT:QM1", "right": "QM1", "k1_m2": 3.0482826275094115},
+      {"left": "P001:QF", "right": "P005:R:QF", "k1_m2": 2.5080157230922717},
+      {"left": "P001:QD", "right": "P005:R:QD", "k1_m2": -1.6256237224951704},
+      {"left": "P001:R:QD", "right": "P005:QD", "k1_m2": -2.5305740133669805},
+      {"left": "P001:R:QF", "right": "P005:QF", "k1_m2": 2.253336368275987},
+      {"left": "P002:QF", "right": "P004:R:QF", "k1_m2": 2.73937355143158},
+      {"left": "P002:QD", "right": "P004:R:QD", "k1_m2": -1.4329166920521},
+      {"left": "P002:R:QD", "right": "P004:QD", "k1_m2": -1.9734485476902},
+      {"left": "P002:R:QF", "right": "P004:QF", "k1_m2": 2.4761794202617478},
+      {"left": "P003:QF", "right": "P003:R:QF", "k1_m2": 3.3920013636572963},
+      {"left": "P003:QD", "right": "P003:R:QD", "k1_m2": -1.699957709359349}
+    ],
+    "drift_deltas": [
+      {"left": "LEFT:T:D4", "right": "T:D4", "delta_length_m": -0.024595691300258155},
+      {"left": "LEFT:T:D3", "right": "T:D3", "delta_length_m": -0.054221416545645496},
+      {"left": "LEFT:T:D2", "right": "T:D2", "delta_length_m": -0.07054795490721263},
+      {"left": "LEFT:T:D1", "right": "T:D1", "delta_length_m": 0.05373663696412051},
+      {"left": "LEFT:T:D0", "right": "T:D0", "delta_length_m": 0.03674328514812766},
+      {"left": "P001:Dend", "right": "P005:R:Dend", "delta_length_m": 0.03949629888900946},
+      {"left": "P001:D1", "right": "P005:R:D1", "delta_length_m": 0.03380701694054539},
+      {"left": "P001:D2", "right": "P005:R:D2", "delta_length_m": -0.0033440098498736665},
+      {"left": "P001:R:D2", "right": "P005:D2", "delta_length_m": -0.029216391500185887},
+      {"left": "P001:R:D1", "right": "P005:D1", "delta_length_m": -0.029183324071855837},
+      {"left": "P001:R:Dend", "right": "P005:Dend", "delta_length_m": -0.012617603426844842},
+      {"left": "P002:Dend", "right": "P004:R:Dend", "delta_length_m": 0.009159773769140817},
+      {"left": "P002:D1", "right": "P004:R:D1", "delta_length_m": 0.04618030913244264},
+      {"left": "P002:D2", "right": "P004:R:D2", "delta_length_m": -0.04970363421807435},
+      {"left": "P002:R:D2", "right": "P004:D2", "delta_length_m": 0.05300873710987333},
+      {"left": "P002:R:D1", "right": "P004:D1", "delta_length_m": -0.005855282856572511},
+      {"left": "P002:R:Dend", "right": "P004:Dend", "delta_length_m": 0.005643192439340888},
+      {"left": "P003:Dend", "right": "P003:R:Dend", "delta_length_m": -0.03411650300602467},
+      {"left": "P003:D1", "right": "P003:R:D1", "delta_length_m": 0.05793555008349244},
+      {"left": "P003:D2", "right": "P003:R:D2", "delta_length_m": -0.022308988793545106}
+    ]
+  },
+  "measured_baseline": {
+    "engine": "configured JuTrack",
+    "measured_date": "2026-09-13",
+    "periodic_optics": {
+      "trace_x": -0.6590031312465519,
+      "trace_y": -1.704103302304033,
+      "tune_x": 0.3034403482076536,
+      "tune_y": 0.5876790988337485,
+      "beta_x_m": 4.491090992419988,
+      "beta_y_m": 1.5173031247393836,
+      "maximum_beta_m": 72.50888202364553,
+      "Dx_m": -1.7306391808301312e-9,
+      "Dpx": -2.6216651102693904e-16
+    },
+    "radiation": {
+      "I1": 0.07892012000132151,
+      "I2": 0.34423677951523657,
+      "I3": 0.018859695294298696,
+      "I4": 0.0002368877158713839,
+      "I5": 1.149380246728698e-5,
+      "Jx": 0.9993118465836074,
+      "Jy": 1.0,
+      "Jz": 2.0006881534163927,
+      "emittance_pm": 600.6480074984273,
+      "energy_spread": 0.0007016270261767651
+    },
+    "full_ring_optics": {
+      "trace_x": -0.4962703432978689,
+      "trace_y": 0.6861135310910536,
+      "tune_x": 0.7100911426448836,
+      "tune_y": 0.805731162679785
+    },
+    "full_ring_emittance_pm": 600.6480074984133,
+    "limitations": [
+      "Bare magnetic lattice with no RF system; this fixture certifies neither RF-dependent ring parameters nor damping times.",
+      "This is a conventional feasible seed regression, not an HMBA result, sub-100-pm design, or nonlinear acceptance validation."
+    ]
+  }
+}

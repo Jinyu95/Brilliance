@@ -961,6 +961,60 @@ def periodic_closure_rows(raw: Mapping[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _bend_radiation_plot_rows(evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows = [dict(row) for row in evidence.get("rows", ())
+            if isinstance(row, Mapping) and _is_finite(row.get("I2_fraction"))
+            and _is_finite(row.get("I5_fraction"))]
+    if not rows:
+        raise ValueError("bend-radiation plot has no finite I2/I5 contribution rows")
+    return rows
+
+
+def render_bend_radiation_contributions_matplotlib(
+    evidence: Mapping[str, Any], path: Path | str, *,
+    title: str = "Per-bend radiation-integral contributions",
+    subtitle: str = "I2 and I5 fractions of the full ring",
+) -> Path:
+    """Headless PNG/PDF companion to the SVG chart, using the same measured rows."""
+    destination = Path(path)
+    if destination.suffix.lower() not in {".png", ".pdf"}:
+        raise ValueError("Matplotlib bend-radiation output must use a .png or .pdf path")
+    rows = _bend_radiation_plot_rows(evidence)
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import PercentFormatter
+
+    figure, axis = plt.subplots(figsize=(12.0, 6.5), constrained_layout=True)
+    try:
+        for offset, key, color, label in ((-.18, "I2_fraction", "#4c78a8", r"$I_2$"),
+                                         (.18, "I5_fraction", "#e45756", r"$I_5$")):
+            axis.bar([index + offset for index in range(len(rows))],
+                     [float(row[key]) for row in rows], width=.36, color=color, label=label)
+        labels = [str(row.get("bend") or row.get("name") or f"B{i + 1}") for i, row in enumerate(rows)]
+        rotate = len(rows) > 12 or max(map(len, labels)) > 16
+        axis.set_xticks(range(len(rows)), labels, rotation=35 if rotate else 0,
+                        ha="right" if rotate else "center")
+        maximum = max(float(row[key]) for row in rows for key in ("I2_fraction", "I5_fraction"))
+        ticks = _nice_ticks(0.0, max(.05, 1.08 * maximum), target_count=6)
+        axis.set_ylim(ticks[0], ticks[-1])
+        axis.set_yticks(ticks)
+        axis.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
+        axis.set_ylabel("Ring contribution")
+        axis.set_xlabel("Bend (saved element order)")
+        axis.set_axisbelow(True)
+        axis.grid(axis="y", color="#e5e7eb", linewidth=.8)
+        axis.spines[["top", "right"]].set_visible(False)
+        axis.legend(loc="upper right", ncol=2)
+        figure.suptitle(f"{title}\n{subtitle}" if subtitle else title, fontsize=14)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(destination, dpi=140, format=destination.suffix[1:].lower())
+    finally:
+        plt.close(figure)
+    return destination
+
+
 def render_bend_radiation_contributions_svg(
     evidence: Mapping[str, Any],
     path: Path | str,
@@ -982,15 +1036,7 @@ def render_bend_radiation_contributions_svg(
     destination = Path(path)
     if destination.suffix.lower() != ".svg":
         raise ValueError("bend-radiation renderer requires a .svg output path")
-    rows = [
-        dict(row)
-        for row in evidence.get("rows", ())
-        if isinstance(row, Mapping)
-        and _is_finite(row.get("I2_fraction"))
-        and _is_finite(row.get("I5_fraction"))
-    ]
-    if not rows:
-        raise ValueError("bend-radiation plot has no finite I2/I5 contribution rows")
+    rows = _bend_radiation_plot_rows(evidence)
 
     left, right, top, bottom = 86.0, float(width - 44), 112.0, float(height - 86)
     chart_width = right - left

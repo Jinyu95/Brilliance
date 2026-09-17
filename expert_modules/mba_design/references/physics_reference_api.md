@@ -32,7 +32,8 @@ a mapping with `model`, `lattice_id`, `damping_partition_x`, `I2_reference`,
 `I5_reference`, `reference_emittance_m`, `reference_emittance_pm`, `rows`, and
 `interpretation`; use `reference["reference_emittance_pm"]`, never `float(reference)`.
 
-The formulas and default constants are unchanged from the working seed pipeline.
-Archived programs using `api.tme_targets`, `api.TMECellTargets`, or
-`api.homogeneous_bend_tme_reference` resolve through this installed module's legacy
-aliases. New code should use the explicit `mba` namespace.
+The conventional method explains the centre conditions and physical seed geometry.
+Source boundaries: [homogeneous-bend TME](https://lss.fnal.gov/archive/test-tm/1000/fermilab-tm-1269.pdf)
+is an analytical scale; [modified-TME](https://doi.org/10.1103/PhysRevSTAB.14.054002)
+trades theoretical emittance for practical optics, not a universal fixed factor.
+Neither source supplies stored strengths for this module.

@@ -13,7 +13,7 @@ from dataclasses import asdict
 from typing import Any, Mapping, Sequence
 
 from .artifacts import json_safe
-from .lattice import LatticeElementIR, LatticeIR
+from .lattice import LatticeElementIR, LatticeIR, lattice_cell_partition
 
 
 def _row(value: LatticeElementIR | Mapping[str, Any]) -> dict[str, Any]:
@@ -257,12 +257,19 @@ def replace_lattice_elements(
 ) -> LatticeIR:
     """Create a traceable lattice revision from a topology edit."""
 
-    return LatticeIR.create(
+    _, periods = lattice_cell_partition(lattice)
+    rows = _materialize(elements)
+    combined_metadata = {**dict(lattice.metadata), **dict(metadata or {})}
+    if periods == 1:
+        combined_metadata["cell_element_count"] = len(rows)
+    revised = LatticeIR.create(
         title=title,
         energy_gev=lattice.energy_gev,
         periodicity=lattice.periodicity,
-        elements=_materialize(elements),
+        elements=rows,
         source=source,
         parent_lattice_id=lattice.lattice_id,
-        metadata={**dict(lattice.metadata), **dict(metadata or {})},
+        metadata=combined_metadata,
     )
+    lattice_cell_partition(revised)
+    return revised

@@ -378,6 +378,50 @@ def run_research_job(
     project_store = ProjectStore(root)
     jobs = ResearchJobStore(root)
     job = jobs.claim(project_id, job_id)
+    try:
+        return _run_claimed_research_job(root, project_store, jobs, job)
+    except Exception as exc:
+        # Imports and controller startup can fail before the narrower numerical
+        # boundaries exist (for example during an unsupported live code edit).
+        # Commit only this worker's operational outcome, never infer a physics
+        # rejection, cancel a separate calculation, or discard saved evidence.
+        trace = traceback.format_exc()
+        current = jobs.load(project_id, job_id) or job
+        completed = current.state is JobState.COMPLETE
+        diagnostic = jobs._jobs_dir(project_id) / job_id / "worker-failure.json"
+        payload = {"schema": "brilliance_worker_failure/v1", "job_id": job_id,
+                   "project_id": project_id, "action": job.action, "job_revision": job.revision,
+                   "project_revision": job.project_revision, "worker_pid": os.getpid(),
+                   "python_executable": sys.executable, "timestamp": _now(),
+                   "phase": "claimed_job_execution", "error_type": type(exc).__name__,
+                   "error": str(exc), "traceback": trace,
+                   "previous_job_state": current.state.value,
+                   "scientific_failure_inferred": False, "independent_jobs_cancelled": False}
+        try:
+            print(trace, file=sys.stderr)
+        except (OSError, ValueError):
+            pass  # A closed worker log cannot prevent its terminal job record.
+        try:
+            _write_once(diagnostic, payload)
+            location = "diagnostic: " + str(diagnostic)
+        except Exception as storage_error:
+            # An unavailable diagnostic path must not prevent a terminal state
+            # when the job's revision store is still writable. The original
+            # traceback remains in the worker log.
+            location = (f"Diagnostic storage failed: {type(storage_error).__name__}: {storage_error}. "
+                        "The complete original traceback is in the worker log.")
+        detail = (f"The research worker encountered an application execution error: {type(exc).__name__}: {str(exc)[:2000]}. "
+                  "This is not a scientific rejection. Saved results and checkpoints remain intact; "
+                  "independent numerical jobs were not cancelled. " + location)
+        if completed:
+            detail = current.detail + "\n\nThe completed increment remains committed; its follow-up failed. " + detail
+        return jobs.finish(current, state=JobState.COMPLETE if completed else JobState.FAILED,
+            controller_status="worker_followup_error" if completed else "worker_execution_error", detail=detail)
+
+
+def _run_claimed_research_job(root, project_store, jobs, job) -> ResearchJob:
+    """Execute an owned job under the outer operational-failure boundary."""
+    project_id = job.project_id
     project = project_store.load(project_id)
     if project is None:
         return jobs.finish(
@@ -463,7 +507,11 @@ def run_research_job(
             }
         elif outcome.disposition == "native_repair" and outcome.recovery:
             from .presentation import ResearchConversationStore
-            from .research_recovery import program_failure_guidance, repair_pause_explanation, schedule_coding_repair
+            from .research_recovery import (
+                program_failure_guidance,
+                repair_pause_explanation,
+                schedule_coding_repair,
+            )
 
             # Normalize the inline calculation into the existing bounded repair
             # contract without changing this job's saved payload or history.
@@ -915,14 +963,13 @@ def _run_managed_expert_job(
         }
         _write_once(failure_path, failure_record)
         from .research_recovery import (
-            coding_failure_summary,
             execution_failure_summary,
             program_failure_guidance,
             repair_pause_explanation,
             schedule_coding_repair,
         )
 
-        headline = coding_failure_summary(str(exc)) or execution_failure_summary(str(exc))
+        headline = execution_failure_summary(str(exc))
         explanation = program_failure_guidance(str(exc))["explanation"]
         failed = jobs.finish(
             job, state=JobState.FAILED, controller_status="expert_execution_failed",
@@ -938,9 +985,10 @@ def _run_managed_expert_job(
             })
         if recovery.get("scheduled"):
             message = (
-                "The calculation hit a coding error before this stage could finish. "
-                f"I’m returning it to the research agent for correction (attempt {recovery['attempt']}). "
-                "Existing results and checkpoints are preserved; this is not a physics rejection.\n\n"
+                "This execution stopped before the stage finished. "
+                f"I’m inspecting the saved program and results to diagnose it and repair what is safe "
+                f"(attempt {recovery['attempt']}). Existing results and checkpoints are preserved; "
+                "the exception alone does not establish a physics failure.\n\n"
                 f"{explanation}\n\n"
                 f"Issue: `{headline}`\n\nDetails: `{failure_path.relative_to(project_directory).as_posix()}`"
             )

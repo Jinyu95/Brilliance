@@ -35,6 +35,80 @@ an unknown/missing validator or a failed check cannot establish request success 
 working candidate. The module owns the physics criteria; the application preserves evidence
 and the active requirements across continuation and managed jobs.
 
+## Composable experiments and exact candidate selection
+
+For composed lattice searches use `ExperimentDefinition`, `LatticeExperiment`
+and `CandidateLedger`. These are numerical operations, not an MBA workflow.
+The expert/project defines allowed structures and physics measurements; Python
+extensions remain supported. Do not rewrite candidate retention or selection.
+
+- `ExperimentDefinition(name, scope, objectives, constraints, provenance)` maps
+  objectives to `min`/`max`. Hard numeric constraints use `lower` and/or `upper`
+  with positive residual `scale`; boolean constraints use `equals`. Separate
+  requirements from proposed choices. Objectives are not implicit hard bounds.
+- `prepare_length_budget(parameters, total_length_m=...)` derives fixed length
+  from actual rows, counts each physical target (including mirror partners), and
+  returns `parameterization`, `initial_position`, `budget`. Bounded exact-sum
+  projection rejects impossible budgets before simulation. Never constrain the
+  variable drifts alone to the total length of a line containing fixed magnets.
+- `MatchingOperation(parameters, solve, contract)` calls `solve(rows, parameters)`
+  using current proposal coordinates. Use the native line or response matcher.
+  Outer/matching field ownership cannot overlap. Only returned rows are measured;
+  solver termination is not matching success.
+- `JuTrackCellEvaluator(...)` reuses a native editor for scalar changes and
+  rebuilds on topology/constructor changes. Flat metrics include `stable`,
+  `geometry_valid`, `radiation_valid`, `emittance_pm`, `Dx_m`, `Dpx`,
+  `maximum_beta_m`, `I2`, `I4`, `I5`. Boundary Dx is not a bump metric; beta maximum
+  is sampled. Required arguments: energy_gev, periods, expected_length_m,
+  expected_angle_rad, limits, minimum_magnet_length_m, minimum_drift_length_m.
+- `LatticeExperiment.evaluate(position)` applies proposal → optional dependent
+  match → measurement → durable exact candidate record before returning the
+  PSO/MOPSO callback result. Software exceptions are not physical infeasibility.
+
+```python
+# parameters and args describe this project's chosen experiment, not a saved solution.
+prepared = api.prepare_length_budget(parameters, total_length_m=cell_length_m)
+measure = api.JuTrackCellEvaluator(**args["native_evaluation"])
+definition = api.ExperimentDefinition(**args["experiment"])
+study = api.LatticeExperiment(
+    definition, prepared["parameterization"], measure=measure,
+    directory=run.workspace / "experiments" / "cell-search",
+)
+optimizer = api.particle_swarm_optimize(
+    study.evaluate, bounds=study.parameterization.bounds,
+    initial_position=study.parameterization.initial_position,
+    variable_names=study.parameterization.variable_names,
+    objective_names=list(definition.objectives),
+    **run.optimization_options("cell-search"),
+)
+selected = study.ledger.select()["selected"]  # all trials, including late improvements
+if selected is not None:  # no feasible result means None, not an invalid fallback
+    exact_rows = selected["candidate"]["elements"]
+    # Independently evaluate this exact cell AND explicit ring, checkpoint both
+    # original receipts, then use run.reporting/run.finish as documented below.
+```
+
+Experiment checks are not native receipts or request acceptance. Final promotion
+still uses exact-candidate and expert acceptance gates. Use
+`study.comparison_table(limit=12)` for a bounded comparison, then one-cell combined
+lattice/optics and per-bend radiation plots of the selected evidence.
+
+`remove_mirrored_quadrupole_pair(rows, element_names=[left_name, right_name])`
+verifies global physical symmetry and replaces only those magnets by equal-length
+drifts, preserving names, spans and bends. It does not match or certify physics.
+Recompile knobs/matching for changed topology and evaluate the hypothesis with
+`study.evaluate_rows(changed_rows, label=...)` or a separately contracted branch.
+Failure leaves earlier candidates intact; removing mandatory components or relaxing
+machine requirements is not simplification.
+
+The transactional archive is `experiments/<name>/candidates.sqlite3`.
+`api.CandidateLedger.open(directory)` recovers exact entries/selection read-only
+without importing the original callback or rerunning physics. Standalone calls
+supply `workspace=...`; managed calls bind this project. Changed contracts require
+a new directory. Put callback settings in provenance or `measure.contract`;
+hidden mutable settings are not reproducible. This archive never supplies another
+project's design seed.
+
 ## Saved program
 
 In the provider-native coding loop, use `write_program` and pass JSON input directly as the
@@ -58,28 +132,24 @@ from brilliance import accelerator_api as api
 
 run = open_research_run()
 args = run.arguments
-out = run.artifact_path("result.json")
-# Accepted current design, if one exists:
-working = run.working_lattice_file
-# Newest archived candidate, including one rejected by a physics gate:
-candidate = run.latest_candidate_lattice_file
-run.progress("matching", completed=0, total=1, metrics={"best_residual": None})
-# ... calculation ...
-run.finish(
-    summary="Numerical result and interpretation.",
-    data={"engine": "JuTrack"},
-    tables=[{"title": "Quantities", "rows": [
-        {"quantity": "emittance", "value": 103.2, "unit": "pm rad"},
-    ]}],
-    plots=[{"path": plot_path, "title": "Distinct plot title"}],
-    downloads=[{"path": csv_path, "title": "Numerical data"}],  # optional
-    methods=["Exact JuTrack/SciPy calls and assumptions"],
-    limitations=[],
-    candidate_lattice=lattice_path,       # LatticeIR, serialized lattice, or artifact path
-    use_as_working_lattice=False,          # explicitly true for the selected, validated working candidate
-    scientific_passed=None,                # calculation validity, not target attainment
-    request_satisfied=False,               # true only when this answers the current request
-)
+candidate = api.load_lattice(run.workspace / args["candidate_path"])
+# This example evaluates an explicitly stored ring. Use evaluate_periodic_cell
+# for a single declared cell; the reporting reader below is the same.
+evaluation = api.evaluate(candidate, include_profile=True, include_radiation=True)
+checkpoint = run.checkpoint_candidate(candidate, evaluation)
+# All numerical work above is durable BEFORE optional presentation below.
+with run.reporting(checkpoint=checkpoint):
+    view = api.evaluation_snapshot(evaluation)
+    run.finish(
+        summary="The saved candidate was evaluated; measured checks are attached.",
+        data={"evaluation": view},
+        tables=[{"title": "Evaluation checks", "rows": [
+            {"Check": key, "Outcome": value} for key, value in view["checks"].items()
+        ]}],
+        candidate_lattice=candidate, candidate_evaluation=evaluation,
+        use_as_working_lattice=False, request_satisfied=False,
+        limitations=["Baseline calculation checks do not establish all machine requirements."],
+    )
 ```
 
 Every stage that constructs, matches, optimizes, or edits a lattice must pass its exact resulting
@@ -91,6 +161,50 @@ inventory. The latest assembled ring is not its earlier unit or matching section
 reconstruct a successfully matched parent from old constants. Use `parent_lattice_id=parent.lattice_id` when wrapping a modified element sequence in
 `api.lattice`, `api.periodic_cell`, or `api.cell_ring`.
 
+Bind every candidate claim to its actual computed snapshot. The native line matcher's
+`numerical_checkpoint` preserves exact returned elements, incoming/outgoing boundary state and
+checks before its final progress event. Construct the final candidate from **those returned
+elements**, then evaluate with `api.evaluate` (explicit ring) or `api.evaluate_periodic_cell`
+(one periodic cell). Immediately call `run.checkpoint_candidate(candidate, evaluation, name=...)`.
+This flushes the exact candidate and hash-bound native receipt to disk without rerunning JuTrack.
+The evaluation cache alone is not durable: checkpoint the cell before computing the full ring,
+and checkpoint the full ring before formatting any tables or plots. Pass the original return as
+`candidate_evaluation=` to `finish`; the normalized reporting view is not a replacement receipt.
+The original proposal and a rebuilt prematch array are not the matched candidate.
+Missing/mismatched verification leaves an unverified archived checkpoint with a specific next
+action, never silently promotes a working lattice. Only if an older failed program did not save
+its evaluation receipt, evaluate the saved final rows once; do not repeat matching or optimization.
+Non-lattice studies do not need a lattice receipt.
+
+Use `with run.reporting(checkpoint=checkpoint):` only around optional formatting, plotting and
+`finish`, never around new physics calculations. A reporting exception publishes a normal partial
+app result from the verified checkpoint, preserves the traceback, and stops that program without
+rematching or accepting the design. Cancellation and scientific rejection still propagate.
+`brilliance.numerical_checkpoints.read_numerical_checkpoint(descriptor, output_directory=...)`
+verifies immutable files for disk-only recovery. In a new worker, set
+`source_output_directory=run.workspace / 'artifacts/programs/EXACT_PRIOR_RUN'` to read
+an earlier program's checkpoint in this project; keep `output_directory` current.
+Use `api.restore_candidate_evaluation(candidate, saved_receipt, source_output_directory=...)`
+to hydrate its original JuTrack evaluation before checkpointing or publishing it in the new run.
+This verifies hashes and exact candidate identity, retains provenance, and never runs the
+simulation. Another project's results, unverified metrics and arbitrary source folders are rejected.
+Its `result` holds the exact original data; `checks_passed` is not full-request acceptance.
+
+Scope is explicit: `api.lattice(periodicity=P, elements=rows)` does **not** repeat `rows`.
+Here P counts periods already present in the stored sequence. For a single cell use
+`api.periodic_cell(elements=cell_rows, intended_repetitions=P, ...)`; this stores one cell with
+`periodicity=1`. For an expanded ring use `api.cell_ring(cell=cell_rows, periods=P, ...)`.
+Both constructors own their structural metadata even when other metadata is copied from a parent.
+`api.one_period_elements` checks that the complete sequence can actually be partitioned as declared;
+it never guesses from the title, names, bend angle, or a hoped-for repetition count. Old malformed
+artifacts remain readable through `load_lattice` for diagnosis, but require an explicit corrected
+revision based on their saved construction source before use. Do not modify the archived original.
+
+`run.finish` saves the final result but does **not** exit Python. At a top-level early failure
+branch, follow it with `raise SystemExit(0)`; inside a stage function, return immediately.
+Never fall through into success-only calculations or a second finish that overwrites the
+failure. Use `run.progress` for intermediate results, not repeated final commits.
+
 All other artifacts must be created with `run.artifact_path(...)`. For long loops,
 call `run.cancellation_requested()` at safe boundaries and publish replaceable progress. Every
 material stage must call `run.progress(...)` with a scientist-readable detail; it appears live in
@@ -101,12 +215,29 @@ message; a new stage creates a new message. Publish intermediate evidence as soo
 run.progress(
     "Compared complete-cell seed hypotheses",
     kind="finding",
+    scientific_role="milestone",
+    stage_id="complete-cell-feasibility", hypothesis_id="matching-B",
+    candidate_id=candidate.lattice_id, parent_candidate_id=parent.lattice_id,
+    outcome="feasible",
     detail="The revised candidate improved the measured objective while preserving the constraints.",
     metrics={"best_emittance_pm": 184.2, "feasible_hypotheses": 2},
     tables=[{"title": "Seed comparison", "rows": comparison_rows}],
     plots=[{"path": comparison_plot, "title": "One-cell seed comparison"}],
 )
 ```
+
+Scientific milestones should state the hypothesis, measured result, comparison with its parent,
+and next decision. Stage names belong to the selected expert method, not the application.
+`kind` controls display: `plan`, `progress`, `finding`, `decision`, `repair`, or `next`.
+`kind="activity"` and `kind="milestone"` are accepted aliases for `progress` and `finding`.
+Other labels become neutral progress with a recorded warning; labels never establish acceptance.
+Use `scientific_role="activity"` for execution starts, retries, generation counters and API details;
+these remain accessible in the activity view without burying the scientific story. The optional
+`interpretation` and `next_decision` fields on `progress` are also supported. A final
+`scientific_stage` carries these same identities and explanations; candidate identity is taken
+from the actual archived lattice. An infeasible attempt is not labelled a successful result.
+For `finish`, use `status="partial"` for unfinished work (`"intermediate"` is an alias).
+Partial results leave the request pending even if their individual calculations are valid.
 
 Progress plots must already exist below the program output directory. `run.finish(...)` publishes
 its final summary, real tables, and declared plots directly into the conversation. Raw source,
@@ -158,6 +289,9 @@ elements = api.scale_element_lengths_to_total(
 # changes duplicate instance names only; family labels and physics are kept.
 elements = api.uniquify_element_names(elements)
 geometry = api.lattice_geometry_summary(elements)  # also accepts a LatticeIR or saved path
+total_length_m = geometry["total_length_m"]
+total_angle_rad = geometry["total_angle_rad"]
+# Geometry-summary keys differ from audit_lattice_constraints' length_m/angle_rad.
 # Field-derived limits for an ultra-relativistic unit-charge beam. Override
 # pole-tip fields and radii only when the scientist supplies the technology.
 limits = api.magnet_strength_limits(energy_gev=3.5)
@@ -182,11 +316,15 @@ ring = api.load_lattice(path)
 result = api.evaluate(
     ring, include_radiation=True, include_profile=True, include_chromaticity=True,
 )
-if not result.linear_optics.stable:
+snapshot = api.evaluation_snapshot(result)  # same reader for evaluate_periodic_cell results
+if not snapshot["checks"]["linear_stable"]:
     # Treat this as physics/numerical evidence and change the candidate.
     ...
-radiation = result.require_radiation()  # concise gate error if unavailable
-emittance_pm = radiation["emittance_pm"]
+actual_circumference_m = snapshot["geometry"]["ring_circumference_m"]
+radiation = snapshot["radiation"]
+if radiation["computed"] and snapshot["checks"]["radiation_physical_validity"]:
+    emittance_pm = radiation["emittance_pm"]
+# Keep result itself for finish(candidate_evaluation=result), not snapshot.
 ```
 
 `api.evaluate` is the final authority for periodic optics and radiation. Radiation claims require a
@@ -194,15 +332,39 @@ stable, closed full ring. `api.natural_chromaticity(...)` and `api.dynamic_apert
 Never import `pyJuTrack` or call its element constructors directly in a research program. Use
 `api.jutrack()` only when a documented JuTrack operation is absent from this API.
 
-The result schema is fixed. Use the typed properties and documented keys; never recursively search
-for approximate key names. `result.radiation_computed` is false when radiation was intentionally
-skipped, and `result.radiation["reason"]` explains the failed prerequisite. Displayed rounded values
-must not be fed back into bend or length closure calculations.
+## Reading an actual evaluation
+
+Use **`api.evaluation_snapshot(evaluation)`** for both `api.evaluate(...)`'s typed result and
+`api.evaluate_periodic_cell(...)`'s dictionary. It also reads their saved JSON dictionaries for
+reporting-only recovery. It never starts JuTrack, expands a ring, or supplies a hoped-for geometry.
+Its fixed top-level keys are `schema`, `engine`, `candidate_lattice_id`, `scope`, `geometry`,
+`linear_optics`, `radiation`, `chromaticity`, `checks`, `acceptance`, and `evaluation_receipt`.
+
+| Section | Exact keys and meaning |
+| --- | --- |
+| `geometry` | `stored_length_m` sums the actual stored elements; `cell_length_m` is the common declared cell length; `ring_circumference_m` exists only for an explicitly stored full ring; `reference_ring_circumference_m` describes the periodic evaluation's identical reference ring, not a stored machine. Missing quantities are `None`. |
+| `geometry` scope | `stored_scope`, `stored_periods`, `evaluated_periods`, `candidate_sha256`, `row_geometry_available`. The evaluated repetition count is the actual argument used, not a copied design target. |
+| `linear_optics` | `stable`, `trace_x/y`, `tune_x/y`, entrance `beta_x_m`, `beta_y_m`, `alpha_x`, `alpha_y`, `Dx_m`, `Dpx`, `Dy_m`, `Dpy`; `maximum_beta_m` is sampled, not a certified continuous extremum. Missing values are `None`. |
+| `linear_optics` profile | `twiss_profile` is a list; `profile_available` says whether it was returned. Profile rows use `beta_x`, `beta_y`, `alpha_x`, `alpha_y`, `Dx`, `Dpx`, `Dy`, `Dpy`, `name`, `s_m`. Pass these rows directly to the optics/lattice plotter. |
+| `radiation` | `computed`, `reason`, `physical_validity`, `I1`–`I5`, `Jx`, `Jy`, `Jz`, `emittance_m`, `emittance_pm`, `energy_spread`, `energy_loss_per_turn_eV`. Original extra native fields remain intact. Unavailable numerical values are `None`, never fabricated zeros. |
+| `chromaticity` | `computed`, `horizontal`, `vertical`, plus original native fields if calculated. |
+| `checks` | `linear_stable`, `ring_bend_closure_required`, `ring_bend_closure_passed`, `passed_baseline_gate`, `radiation_computed`, `radiation_physical_validity`, `full_ring_evaluated`. Baseline means only stability and required bend closure; check radiation validity separately. |
+| `acceptance` | `accepted=False`, `machine_requirements="not_assessed"`, `scientific_request="not_assessed"`, `publication_required=True`, `full_ring_validation_required`. An evaluation is not project publication or expert scientific acceptance. |
+
+New evaluations capture `evaluation_geometry` from exact rows **before** recording the numerical
+receipt. `evaluation_snapshot` is a detached reporting view, not a substitute receipt payload:
+pass the original evaluation to `finish(candidate_evaluation=...)`. Preserve full precision in
+calculations; format only for display. There is no `result.geometry_summary` attribute. Existing
+`.geometry` and `.as_dict()` interfaces remain supported, but their legacy geometry key names
+differ between full-ring and periodic evaluations; use the common reader above for new code.
+Legacy results containing saved candidate rows can recover actual geometry without simulation.
+Old periodic dictionaries without rows are labelled `row_geometry_available=False`; their old
+geometry is retained under `legacy_reported_geometry`, not invented as a new row-bound measurement.
 
 `api.evaluate(...)` returns a typed `CandidateEvaluationResult`. Its
 `result.linear_optics` properties are `stable`, `trace_x`, `trace_y`, `tune_x`, `tune_y`,
 `periodic_closure_max`, `periodic_residuals`, `twiss_profile`, and `one_turn_matrix`. Beta functions
-and dispersion are values in each `twiss_profile` row (`beta_x`, `beta_y`, `Dx`, `Dpx`), not
+and dispersion are available through `evaluation_snapshot` or profile rows, not
 top-level `LinearOpticsResult.beta_x_m` attributes. Full-ring `tune_x` and `tune_y` are the
 fractional one-turn tunes returned by JuTrack; the integer part cannot be reconstructed by dividing
 them by the number of cells. For a repeated cell, `evaluate_periodic_cell` reports the per-cell
@@ -216,8 +378,9 @@ top-level keys `engine`, `candidate_lattice_id`, `evaluation_scope`, `periods`, 
 available. These scalar beta/dispersion values are at the CELL ENTRANCE, never at a bend centre.
 With `include_profile=True`, `linear_optics["twiss_profile"]` contains START and element-exit
 rows with `name`, `s_m`, `beta_x`, `beta_y`, `alpha_x`, `alpha_y`, `Dx`, `Dpx`; it can be passed
-directly to `save_optics_lattice_plot`. An unsplit bend has no sampled centre. Use a separate
-validated diagnostic split to sample its centre, not the entrance scalars.
+directly to `save_optics_lattice_plot`. An unsplit bend has no sampled centre. Use
+`build_jutrack_profile_sampler(...).linear_metrics(sample_fractions={bend_name: [0.5]})`
+to measure its centre with native partial-element propagation; do not split the physical design.
 Its `radiation` mapping always contains `computed`; when true it also contains `I1`–`I5`,
 `Jx`, `Jy`, `Jz`, `emittance_m`, `emittance_pm`, `energy_spread`, and
 `energy_loss_per_turn_eV`. Do not inspect runtime objects to obtain these names.
@@ -377,6 +540,16 @@ the target residuals, geometry, and exclusive knob ownership before choosing ano
 Other expert tools may use the same outcome with `code` and `diagnostics`; do not catch arbitrary
 exceptions and relabel them as this outcome.
 
+Engineering envelopes distinguish local and integrated strengths. Calling
+`api.magnet_strength_limits(energy, length_m=L)` also returns `max_abs_angle_rad`,
+`max_abs_k1l_m1` and `max_abs_k2l_m2`. Local Kn limits depend on pole-tip field,
+aperture and rigidity, not length; integrated KnL limits scale with L. For K3,
+explicitly supply both `octupole_pole_tip_field_t` and `octupole_radius_m`;
+the optional outputs are `max_abs_k3_m4` and (with L) `max_abs_k3l_m3`.
+Use `audit_lattice_constraints(..., length_bounds_m={"SBEND": [Lmin,Lmax], ...})`
+to enforce declared physical-kind length ranges on actual rows. Ranges are
+task-specific allocations; core tools impose no MBA length defaults.
+
 ```python
 limits = api.magnet_strength_limits(energy_gev=energy)
 k1_max = limits["max_abs_k1_m2"]
@@ -424,9 +597,37 @@ Your objective must also check `api.audit_lattice_constraints` with the declared
 minimum-length limits, plus radiation physical validity; relative geometry bounds and exact
 sum projection do not enforce these coupled constraints. Re-audit the selected physical rows.
 
+For explicit per-field ownership use `included_element_names_by_field`. When supplied, ONLY
+the listed fields/elements vary; include both global mirror partners by their real saved names.
+For example, a strength-plus-drift-length search can use:
+
+```python
+design = api.infer_mirror_symmetric_parameterization(
+    elements, fields=("length_m", "k1_m2"), k1_bounds=(-k1_max, k1_max),
+    included_element_names_by_field={
+        "length_m": design_drift_names,  # both partners; no quadrupole lengths
+        "k1_m2": design_quadrupole_names,  # excludes inner matching families
+    },
+    minimum_length_m=declared_minimum_drift_length,
+    exact_sum_by_field={"length_m": cell_length},
+)
+```
+
+Without that inclusion map, BOTH length and strength vary on every eligible, unfixed quadrupole.
+Count compiled knobs, not magnet families in prose: eight quadrupole pairs with both fields
+plus eight drift pairs give 24 coordinates, not 16. Exact sum constraints project coordinates;
+the population policy conservatively counts all compiled outer coordinates.
+
+When adding bend-angle knobs to this example, include `"angle_rad": design_bend_names` in the
+inclusion map AND `"angle_rad"` in `fields`. Adding only an exact angle sum does not select any
+bends. Exclude both partners of a fixed straight; excluding only `ID_half` while retaining
+`R:ID_half` is not a mirror-symmetric selection. Resolve partners from actual ordered rows rather
+than assuming a prefix. Contradictory explicit field maps are caught by source preflight.
+
 Every baseline value selected by a compiled parameterization must already lie inside its declared
-bounds. Clip or repair the seed before compiling; the compiler deliberately rejects an impossible
-initial coordinate instead of silently evaluating a different lattice.
+bounds. Read exact saved values, not rounded display tables. If the exact baseline is genuinely
+out of bounds, revise the proposal explicitly and re-evaluate it; do not silently clip an accepted
+parent or widen its limits. The compiler rejects an impossible initial coordinate.
 
 The callback determines the physics and residual scaling. Outer design parameters and inner
 matching parameters must be disjoint. Seed tunes are reported, not matched, unless the scientist
@@ -469,6 +670,106 @@ solution = least_squares(residual, x0, bounds=(lower, upper), x_scale="jac")
 
 Evaluate the returned physical lattice, not merely the optimizer coordinates.
 
+## Native JuTrack open-line matching
+
+For a transfer line with a known incoming Twiss/dispersion state use
+`api.JuTrackLineEvaluator` (reusable), `api.evaluate_jutrack_line` (one shot), or
+`api.match_jutrack_line` (bounded multistart matching). None requires the open
+line to be a stable periodic ring. All propagation is native JuTrack; analytical
+reference physics must not become a substitute transport simulator.
+
+`measurement = api.evaluate_jutrack_line(...)` returns `evaluable`, `passed`, `endpoint`,
+`metrics`, `twiss_profile`, `geometry`, `engineering`, `checks`, `diagnostics` and `sampling`
+(when transport succeeded). Read the eight output quantities from **`measurement["endpoint"]`**,
+not `measurement.get("exit", {})`. `evaluable=True` means finite native line optics exist;
+`passed=False` may still identify a finite over-beta candidate. Neither is a periodic-cell gate.
+For `match_jutrack_line`, its fresh replay is in `match["measurement"]`; therefore read
+`match["measurement"]["endpoint"]`. Do not interpret an absent/empty mapping as a matched boundary.
+
+```python
+# incoming contains all eight exact measured entrance fields:
+# beta_x_m, beta_y_m, alpha_x, alpha_y, Dx_m, Dpx, Dy_m, Dpy.
+match = api.match_jutrack_line(
+    line_rows, matching_knobs, energy_gev=energy,
+    initial_twiss=incoming, targets=exit_targets,
+    expected_length_m=line_length, expected_angle_rad=line_angle,
+    limits=limits, maximum_beta_m=declared_beta_cap,
+    minimum_magnet_length_m=minimum_magnet_length,
+    minimum_drift_length_m=minimum_drift_length,
+)
+# exit_targets maps each requested endpoint quantity to (value, absolute tolerance).
+# Example: {"alpha_x": (0.0, 1e-4), "alpha_y": (0.0, 1e-4),
+#           "Dx_m": (0.0, 1e-4), "Dpx": (0.0, 1e-5)}.
+run.finish(summary="Measured open-line matching attempt", status="partial",
+           data={"match": match},
+           tables=[{"title": "Exit boundary residuals", "rows": match["residuals"]}],
+           request_satisfied=False)
+```
+
+Knobs come from the general parameterization compiler. Preflight starts without
+Julia using `api.plan_matching_starts(matching_knobs, limits=limits,
+start_positions=starts, max_starts=8, seed=0)`. Explicit starts run first;
+exact duplicates are merged, then the unchanged valid baseline and reproducible
+Latin-hypercube proposals fill available slots. **`max_starts` caps the total**:
+eight supplied starts fit a budget of eight, even if they include the baseline.
+Overflow is preserved in `deferred_positions`, never silently dropped or added
+to the workload. `budget` reports supplied, duplicate, generated and deferred
+counts. With no cap, the default is `max(64, 10 * knobs, unique supplied + baseline)`.
+All supplied positions (including deferred ones) must respect engineering bounds;
+invalid automatic baselines appear in `skipped`, not as clipped coordinates.
+The matcher returns this `start_plan`, `completed_starts`, and ordered
+`remaining_start_positions`/`remaining_start_sources` for continuation; early
+success does not imply every planned start was tried. Pass remaining positions
+and an explicit cap to a later call to continue without expanding its budget.
+
+`max_nfev=500` is a per-start solver budget, not a time limit or the total number
+of JuTrack calls. Managed matching programs are submitted as durable jobs and automatically
+publish native evaluation progress/residuals and honor cancellation, even when
+the model omits callback boilerplate. Explicit callbacks are also supported. The result records
+all attempt terminations, measured residual Jacobian singular values, actual
+callback counts, exact returned `elements`, incoming state, and a fresh native
+`measurement`. Engineering-invalid proposals are never simulated. Finite
+over-beta lines remain evaluable during matching, but cannot pass the final
+declared sampled-beta gate. Interior samples and physical exits use JuTrack;
+sampled maxima do not certify continuous extrema. `maximum_beta_m=None`
+explicitly means there is no beta limit. The current adapter covers uncoupled
+hard-edge DRIFT/QUAD/KQUAD/pure SBEND/KSEXT/KOCT/MARKER without nontrivial
+edges, transforms or skew fields; unsupported cases are explicit, not approximated.
+
+Attempt diagnostics have nullable `nfev`, `njev`, `solver_status`, `final_position`
+and `residual_jacobian_rank` when the local solver could not return those values;
+null is not a measured zero. `initial_position` is the requested proposal;
+`physical_initial_position` records the actual first trial after exact-sum
+projection (or null if no physical trial was constructed).
+Managed jobs save exact provisional rows and remaining starts after every local
+start and at most once per 60 seconds during evaluable callbacks, before optional
+reporting. Recover them with `api.read_numerical_checkpoint(...)`. Checkpoint kind
+`jutrack_line_match_progress` is **not** a verified match: replay recovered rows
+with JuTrack before use. The final `jutrack_line_match` checkpoint retains the
+independently verified outcome. No checkpoint alone accepts a complete machine.
+Continue using the saved program's original parameterization and physics contract;
+this preserves numerical observations and start queues, not SciPy's internal
+solver state. An interrupted in-flight start remains queued and may repeat work.
+
+`solver_terminated` and `solver_success` are numerical diagnostics.
+`match_success` requires every exit tolerance and declared line limit to pass a
+fresh JuTrack replay. `complete_cell_accepted` is always false: assemble the exact
+matched rows and separately validate periodic stability, achromat, radiation and
+machine requirements. A failed matcher is not evidence of insufficient space.
+
+## Geometry reporting
+
+Use `run.progress("Assembly geometry", candidate_lattice=candidate)` to attach
+an automatic table computed from the exact saved rows; this does not run JuTrack.
+`run.finish(candidate_lattice=...)` also publishes these dimensions even if optics
+failed. Stored length, periodic-cell length, projected repetition length and an
+explicit full ring are distinct quantities, never copied from the target contract.
+Use `kind="contract"` or `kind="targets"` on a requirements table. A custom
+measured geometry table needs `kind="candidate_geometry"`, `lattice_id`, and
+canonical metric/value rows; unbound geometry tables are retained for diagnosis,
+not displayed as verified measurements. Prefer the automatic geometry table.
+Numerical geometry inputs retain full precision; format only at display time.
+
 ## Population optimization
 
 The public optimizer contract is complete; do not copy or reimplement PSO in a research program.
@@ -505,6 +806,15 @@ The evaluator receives one NumPy position vector and returns this mapping:
     # any other compact entries are retained under best_candidate["metrics"]
 }
 ```
+
+Production searches default to `max(500, 10 * independent_knobs)` particles and
+80 generations. Managed runs apply the scientist's `[optimization]` configuration
+even if model-written code asks for less, and publish requested/effective budgets.
+Only the scientist should lower those settings for a deliberately small experiment;
+a callback preflight is not a reason to underfund the subsequent search. A saved
+smaller swarm is resumed without resizing, labelled as a smaller prior campaign;
+start a new named campaign to expand its population, retaining its best valid seeds.
+Neither a large budget nor a completed budget proves convergence or feasibility.
 
 Every violation is non-negative and zero when satisfied. A candidate is feasible only when all
 objectives are finite, every violation is zero, and `feasible` is not false. Do not hide achromat
@@ -553,6 +863,9 @@ For a saved research program, do not hand-build the durable controls. Use
 `control = run.optimization_options("descriptive-campaign-name")` and pass `**control` to either
 optimizer. It publishes candidate/generation progress, checks scientist cancellation between
 batches, checkpoints every completed generation, and caches every completed candidate evaluation.
+For fast callbacks, pass `cache_evaluations=False` alongside `**control` to skip per-evaluation
+cache files; the supplied cache directory is ignored, generation checkpoints remain resumable,
+and an interrupted partial generation may need reevaluation. Existing cache files are not deleted.
 It supplies exactly `progress_callback`, `cancellation_check`, `checkpoint_path`,
 `evaluation_cache_directory`, `campaign_identity`, and `resume`. Do not also pass those keywords
 explicitly (Python rejects duplicate keywords). It does **not** supply `bounds`, `objective_names`,
@@ -593,9 +906,9 @@ instead of deleting a checkpoint. Selected candidates always need JuTrack revali
 For nested lattice matching use `api.optimize_lattice_parameters(...)`. Its evaluator owns JuTrack
 metrics; the kernel owns proposal/selection mechanics. Multi-objective mode uses parent-plus-
 offspring nondominated sorting and crowding. Generate a fully feasible initial population for hard
-problems and normally use at least ten particles per independent outer knob. This lattice helper
-enforces ten particles per outer knob and twenty generations by default; an explicit zero override
-is for labelled smoke tests, never production or saturation evidence. It also rejects overlapping
+problems. The managed lattice helper applies the same configured production floors
+before allocating its seeds; standalone kernel tests can use explicit small budgets.
+Model-written smoke-test options cannot lower the managed policy. It also rejects overlapping
 outer/matching field ownership and performs an inner match for every structural proposal.
 
 ```python
@@ -622,7 +935,14 @@ def make_worker_physics(baseline_rows):
 
     return metrics, objectives
 
-population = max(500, 10 * len(design.knobs))
+# Do this BEFORE loading JuTrack or probing callbacks. Omit population_size to
+# use the configured production floor; small managed requests are raised visibly.
+plan = api.plan_lattice_optimization(design, matching)
+run.progress("Optimization setup", kind="decision",
+    detail="Compiled field ownership and production budget; physics feasibility not yet tested.",
+    metrics={"outer_knobs": plan["outer_knobs"], "matching_knobs": plan["matching_knobs"],
+             "population": plan["population_size"], "generations": plan["generations"]},
+    tables=[{"title": "Optimization and matching variables", "rows": plan["knob_table"]}])
 optimization = api.optimize_lattice_parameters(
     elements,
     design,
@@ -631,8 +951,8 @@ optimization = api.optimize_lattice_parameters(
     evaluate_objectives,       # receives the rematched rows; returns the mapping above
     match_targets={"Dx_m": (0.0, 1.0e-4), "Dpx": (0.0, 1.0e-4)},
     objective_names=("emittance_pm",),
-    population_size=population,
-    generations=40,
+    population_size=plan["population_size"],
+    generations=plan["generations"],
     minimum_population_per_knob=10.0,
     require_feasible_initial_population=True,
     # This factory runs independently in every configured worker. It must load
@@ -645,7 +965,7 @@ selected_rows = optimization["selected_elements"]
 assert selected_rows is not None
 ```
 
-`optimization` has the public PSO keys documented above plus `parameterization`,
+`optimization` has the public PSO keys documented above plus `optimization_plan`, `parameterization`,
 `matching_parameterization`, `selected_elements`, `selected_matching`, `initialization`,
 `convergence_diagnostic`, `local_polish`, and `inner_matching_performance`. In particular, record
 the generation-zero feasible count, improvement after generation zero, matching success/failure

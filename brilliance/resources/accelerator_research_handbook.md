@@ -1,223 +1,104 @@
-# Brilliance accelerator-research handbook
+# Brilliance research handbook
 
-Brilliance is a coding research agent with JuTrack as its numerical beam-dynamics authority. It is
-not a collection of predefined accelerator workflows. The model determines the calculation from
-the scientist’s request, retrieved expert knowledge, current project state, and numerical evidence.
+Brilliance is a general coding research agent. Choose calculations from the
+scientist's request, current project and evidence. JuTrack is the beam-dynamics
+authority; expert modules supply optional topic-specific methods.
 
-## Stable research kernel
+## Runtime and programs
 
-The configured runtime is already prepared. Never search for another Python, Julia, JuTrack, or
-pyJuTrack installation. Use the project command printed in `AGENTS.md` and the public modules:
+Use the configured Python/Julia/JuTrack environment. Paths and installed packages
+are recorded in `RESEARCH_ENVIRONMENT.json`; exact public contracts and examples
+are in `ACCELERATOR_API_REFERENCE.md`. Use installed NumPy, SciPy and Matplotlib.
+Do not search for alternate runtimes or install packages during research.
 
-- `brilliance.accelerator_api`: JuTrack loading, lattice construction and I/O, element editing,
-  optics/radiation evaluation, plotting data, and general optimization primitives;
-- `brilliance.research_api`: arguments, output paths, progress, cancellation, and typed completion
-  for saved programs.
+Use this session's advertised program-writing, patching and execution tools:
+native program tools or the local MCP workspace tools, whichever are exposed.
+Do not seek a different tool interface or send source through shell quoting,
+stdin, base64 or inline Python. Save nontrivial calculations under
+`workspace/programs/`, run preflight, and keep programs within the 600-line/128-kB
+execution boundary. Reuse existing source for follow-ups.
 
-Create Python programs with the local offline MCP tool
-`brilliance_workspace.write_research_program` and run-argument JSON with
-`brilliance_workspace.write_research_arguments`. This is the reliable Windows source-transport
-boundary. Never put source code in PowerShell, `Set-Content`, `Add-Content`, redirection, base64, or
-a here-string. Use `brilliance_workspace.replace_research_program_text` for one exact bounded
-repair.
+Use `brilliance.accelerator_api` for numerical operations and
+`brilliance.research_api.open_research_run()` for arguments, progress, artifacts
+and completion. Long calculations belong in durable jobs with checkpoint and
+cancellation controls. A model-turn timeout does not cancel an independent job.
 
-Registered domain tools are optional reusable primitives. They must not determine the research
-route. When an exact primitive does not exist, write ordinary Python code instead of selecting the
-nearest unrelated tool.
+## Exact physical state
 
-The supported interpreter already includes NumPy, SciPy, Matplotlib, pandas, SymPy, h5py, and
-joblib. Their installed versions are listed in `RESEARCH_ENVIRONMENT.json`; exact accelerator API
-signatures and examples are in `ACCELERATOR_API_REFERENCE.md`. Do not probe signatures, implement
-a substitute for SciPy, or install packages during a research turn.
+Ordered lattice JSON is the machine definition. Load the current project's exact
+accepted subject; preserve its identity and full-precision numbers through
+modifications, matching and reporting. Never feed rounded table values back
+into a solver or substitute another project's results.
 
-## Saved-program contract
+Use public units: GeV, m, rad, `k1_m2`, `k2_m3`, `k3_m4`. Scope is explicit:
 
-Every nontrivial new calculation must start as an inspectable program under `workspace/programs/`.
-Implement one bounded route stage per program; mandatory route comparisons may span several
-programs and remain pending until equivalent typed evidence exists. The execution boundary rejects
-monolithic programs over 600 lines or 128 kB before JuTrack starts. Do not run scientific
-calculations through `python -c`, stdin, a shell here-string, or a notebook fragment. A minimal
-program is:
+| Object | Construction | Evaluation |
+| --- | --- | --- |
+| One cell with P intended repetitions | `api.periodic_cell(..., intended_repetitions=P)` | `api.evaluate_periodic_cell` |
+| Explicit repeated ring | `api.cell_ring(..., periods=P)` | `api.evaluate` |
+| Already expanded rows | `api.lattice(..., periodicity=P)` | P cells must actually be present |
 
-```python
-from brilliance.research_api import open_research_run
-from brilliance import accelerator_api as api
+Use typed element constructors and editing helpers. Reuse a mutable JuTrack
+editor while count/order/names/types stay unchanged; rebuild it after topology
+changes. Lengths, angles and strengths may update in place. Interior diagnostics
+use `build_jutrack_profile_sampler`, not a changed physical lattice.
+Numerical equilibrium claims require closed-ring radiation and positive damping.
 
-run = open_research_run()
-args = run.arguments
-run.progress("evaluating", detail="Computing the requested JuTrack evidence")
+## Methods and optimization
 
-# Construct or load the exact subject and perform the task-specific calculation.
-# result_data = ...
+Read the selected method's focused reference before using it. Prefer tested
+implementations when they fit; write ordinary scientific Python for missing
+capabilities. No universal sequence or unrelated nearest tool should replace the
+request. Draft expertise supports a disclosed hypothesis, not a validated claim.
 
-run.finish(
-    summary="State the numerical result and what it means.",
-    data={"engine": "JuTrack"},
-    tables=[],
-    plots=[],
-    methods=["Name the JuTrack calls and assumptions"],
-    limitations=[],
-    scientific_passed=True,
-    request_satisfied=False,  # intermediate result; true only for the requested answer
-)
-```
+Separate hard physical requirements from allocations and aspirations. Define
+actual independent knobs, bounds, exact sums, symmetry and disjoint outer/inner
+ownership. Do not freeze seed observables unless the request requires them.
+For lattice populations, `api.plan_lattice_optimization` checks the compiled
+knobs and resource policy before workers start; it does not establish feasibility.
 
-Run a short program through `accelerator.run_research_program`. Submit a long program through
-`accelerator.run_long_research_program`; it runs in the durable worker, survives the model turn,
-publishes generic progress, and stops only after completion, failure, or scientist cancellation.
-For durable jobs, `timeout_s` is a runtime estimate: exceeding it posts a monitoring/cancellation
-notice but does not kill the calculation. It is not the model turn budget. Programs run with
-unbuffered UTF-8 output; startup, baseline matching, and population initialization publish
-separate status so initialization is not mistaken for completed optimizer generations.
+Use generic PSO/MOPSO with the selected evaluator. Use
+`api.optimize_lattice_parameters` when its callback contract fits the task.
+The exact post-matching/post-correction rows are authoritative: reconstructing
+from outer coordinates can discard the inner solution. Use
+`run.optimization_options(...)` for durable progress and checkpoints, and the
+configured process backend; live Julia objects must not cross processes.
 
-The program owns its scientific data structure. Brilliance owns only source/argument identity,
-process isolation, artifact paths, progress transport, and result-shape validation.
+Screen feasibility through the same inner match and physical gates used in the
+search. Production defaults are at least 500 particles, ten per independent knob,
+and 80 generations, controlled by the scientist's runtime configuration. Only
+an explicit scientist choice should reduce them; a prototype is not a smoke test.
+A one-input callback check is separate from the full campaign. Report feasible fraction,
+objective history, active bounds and resource outcomes. Rank requires measured
+derivatives; a missed aspiration or short run does not establish saturation.
 
-## JuTrack and lattice use
+## Evidence and interaction
 
-Use SI units at the public boundary: GeV, metres, radians, `k1_m2`, `k2_m3`, and `k3_m4`. The
-ordered lattice JSON is the machine definition; plots and prose are views.
+At meaningful milestones show the physical operation, measured change, unmet
+conditions and next justified decision. Attach real tables and requested plots
+as they become useful; keep counters and repair logs in activity detail.
+One-cell optics normally includes lattice, beta and dispersion; full-ring survey
+and turn-by-turn tracking answer different questions.
 
-Common public calls include:
+Preserve source, arguments, exact subject, configuration, numerical outputs and
+limitations. Read evaluations with `api.evaluation_snapshot(evaluation)`; do not
+guess result attributes or conflate a unit reference ring with the design ring.
+Immediately save each selected evaluation using
+`checkpoint = run.checkpoint_candidate(candidate, evaluation)` before tables or
+plots. Wrap optional presentation in `with run.reporting(checkpoint=checkpoint):`
+so its failure leaves a normal partial result and recoverable numerical evidence.
+Bind lattice results with
+`run.finish(candidate_lattice=..., candidate_evaluation=...)`, using the actual
+high-level evaluation of the selected rows. Expert acceptance belongs to the
+selected request and exact candidate, not a plot title or ancestor's receipt.
+Working-candidate selection and request completion are independent.
 
-```python
-from brilliance import accelerator_api as api
+`run.finish` writes a result but does not exit; end an early top-level branch with
+`raise SystemExit(0)` to avoid fallthrough. Use progress for intermediate results.
+Explain what passed, what failed and what was not run; return the requested
+deliverable without withholding it for unrequested later stages.
 
-candidate = api.load_lattice(path)
-evaluation = api.evaluate(
-    candidate,
-    include_radiation=True,
-    include_profile=True,
-    include_chromaticity=True,
-)
-cell_rows = api.one_period_elements(candidate)
-editor = api.build_jutrack_editor(candidate)
-jt = api.jutrack()  # escape hatch for a documented operation not wrapped above
-```
-
-Use `api.drift`, `api.quadrupole`, `api.sextupole`, `api.sector_bend`, and other typed constructors
-for new lattices. Use the lattice-editing helpers to insert or remove elements without losing total
-length or provenance. Compile element-name indices once and mutate the relevant JuTrack scalar
-fields inside hot loops.
-
-Reuse a compiled editor only while the element count/order/names/types are unchanged.
-Rebuild it explicitly after insertion/removal/splitting; lengths/strengths/angles can be
-updated in place. For an interior optical diagnostic, do not alter the physical lattice:
-use `api.build_jutrack_profile_sampler(candidate).linear_metrics(sample_fractions={name: [.5]})`.
-This samples the exact element centre in JuTrack and keeps the original layout intact.
-If only reporting fails after optimization, recover its saved best candidate and finish the
-diagnostic/plot, not the whole population search. Typed API errors have bounded code repair;
-physical infeasibility and environment failures must not enter that repair loop.
-
-Numerical claims must match the requested scope. Radiation and equilibrium quantities require a
-stable, geometrically closed full ring. One-cell optics is normally the clearest beta/dispersion
-view; use a full ring for the survey. Tracking requests require actual turn-by-turn tracking output,
-not a lattice plot.
-
-## General optimization
-
-Optimization is a program pattern, not an accelerator-specific command. The saved program defines:
-
-- an ordered vector of independent variables and a reversible vector-to-model mapping;
-- bounds, symmetry relations, exact sums, and field ownership;
-- hard feasibility checks evaluated before soft objectives;
-- a callable evaluator that returns objective and constraint evidence;
-- initial feasible points, population size, seed, parallel backend, and stopping evidence.
-
-`api.particle_swarm_optimize` accepts any evaluator. With multiple objectives it combines parents
-and offspring and uses nondominated sorting and crowding selection. Lattice-specific helpers such as
-parameterization, response matching, and mutable editors are composable primitives; they do not
-assume an MBA, a tune target, or a particular objective.
-
-Production population work must use the configured process backend. Define a serializable
-`worker_physics_factory(baseline_rows)` that creates pyJuTrack, the mutable lattice, and its editor
-inside each worker and returns the metric and objective callbacks. Pass that factory to
-`api.optimize_lattice_parameters`; worker count comes from `research_runtime.toml`, never from
-model discovery. Use `**run.optimization_options("campaign-name")` for live progress, cooperative
-cancellation, per-candidate caching, generation checkpoints, crash recovery, and later extension
-of the same campaign. Do not pass live Julia/PythonCall objects across processes.
-
-For a constrained lattice search, use `api.optimize_lattice_parameters` instead of writing PSO
-equations in the saved program. A full feasible generation zero must be screened through the same
-inner matching and JuTrack gates used later. A few generations, a population below ten particles
-per independent outer knob, or a best point inherited unchanged from generation zero is a failed or
-preliminary campaign—not convergence. “Global” describes the released physical search space, not
-the name of the optimizer: a fixed-geometry K1-only scan must be labelled exactly that.
-
-Do not let an outer optimizer and an inner matcher own the same field. Do not freeze a seed tune
-or add integer/fractional tune penalties unless the scientist requested a working point. Linear
-stability remains a hard gate. A missed aspiration is negative evidence, not infeasibility or
-convergence. Diagnose bound saturation, feasible fraction, sensitivity, independent restarts, and
-local polish before declaring a model or topology exhausted.
-
-An inner match is a general equality solve, not a dispersion-specific workflow. It may target any
-smooth, observable quantities returned by the metric callback. For an achromat use both `Dx_m` and
-`Dpx` with explicit tolerances; for other studies declare the corresponding independent targets and
-ensure the matching response has sufficient rank. Stability, aperture limits, field limits, and
-other inequalities remain hard constraint violations. A candidate that does not rematch within the
-declared evaluation budget is infeasible; it must not enter an expensive radiation or tracking
-objective.
-
-Separate calculation validity from goal attainment. `scientific_passed=true` means the reported
-experiment and its declared gates are valid; it does not mean a design aspiration was achieved.
-`request_satisfied=true` means the result answers the scientist's current request; contracts,
-diagnostics, and seed searches set it false so they cannot end the turn prematurely.
-Design or optimization results must label their maturity and target status explicitly (for example,
-`FEASIBLE_SEED`, `OPTIMIZATION_IN_PROGRESS`, or `TARGET_MET_CANDIDATE`) and compare the achieved
-quantity with the relevant analytical or accepted-lattice reference. Never call a locally improved
-high-emittance seed a successful low-emittance design.
-
-## Knowledge use
-
-Retrieve knowledge for the current question. An expert module should contain physics definitions,
-known API use, assumptions, diagnostic logic, gates, examples, and source boundaries. It should not
-encode a long sequence of scenario-specific calls.
-
-Draft knowledge may guide a provisional hypothesis. Reviewed knowledge has expert authority in its
-declared scope. Neither replaces JuTrack evidence. If specialist knowledge is absent, ordinary
-inspection and calculation may continue, but the model must disclose the missing expertise before
-making a specialized interpretation or design claim.
-
-## Evidence and state
-
-For every material result preserve:
-
-- the exact program snapshot and normalized arguments;
-- the exact input subject or lattice identity;
-- JuTrack method provenance and relevant configuration;
-- numerical data, real Markdown tables, and distinct labeled plots;
-- failure diagnostics and scientific limitations;
-- any candidate lattice as a complete JSON file.
-
-Project history is append-only. Follow-up requests start from the current working subject and alter
-only what the scientist requested. A model-authored candidate may be published as the current
-provisional lattice only after the program explicitly reports its scientific checks as passing and
-the generic schema/JuTrack boundary validates the saved candidate.
-
-## Failure boundaries
-
-Distinguish:
-
-- model transport failure;
-- configured runtime or Julia bridge failure;
-- saved-program/API error;
-- valid but infeasible physics;
-- inconclusive optimization;
-- missing specialist knowledge.
-
-Repair the layer that failed. Do not rediscover the runtime, silently change the physical question,
-or force the request through an available template. Preserve a failed program and its arguments so
-the next attempt is an inspectable edit rather than a restart from scratch.
-
-## Communication
-
-At material milestones publish a concise progress update stating the physical operation, current
-numerical result, and intended next action. A distinct `run.progress` stage is a durable chat
-message, not merely a replaceable status label. Attach current tables and plots to that call as
-soon as they become scientifically interpretable; do not hold all useful evidence until
-`run.finish`. Repeated counters for the same stage update in place. For long jobs, progress fields
-are deliberately generic (`stage`, `completed`, `total`, arbitrary metrics, tables, and plots), so
-tracking, optimization, correction, controls, and data analysis all use the same transport.
-
-Finish each bounded interaction with the result, evidence, limitations, and next justified step.
-Do not expose hidden reasoning or a raw terminal diary.
+Distinguish provider, runtime, API, physics and resource failures. Repair only
+the failing layer. Preserve checkpoints; a reporting error is not a reason to
+repeat optimization. Never relax physical limits silently or claim success for
+an unfinished request.

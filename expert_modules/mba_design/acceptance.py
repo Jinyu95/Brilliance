@@ -1,93 +1,98 @@
-"""MBA-specific request policy; the application only hosts registered validators.
-
-This optional guard recognizes shape-making requests. It does not select a seed,
-prescribe an optimization campaign, or change the conventional design pipeline.
-"""
-
+"""MBA request scope and outcome evidence, without method-selected routes."""
 from __future__ import annotations
 
-import ast
 import re
 
-HYBRID_SHAPE = "hybrid_mba_shape"
+CONVENTIONAL_LINEAR = "conventional_mba_linear"
+HYBRID_LINEAR = "hybrid_mba_linear"
+MBA_OPTIMIZATION = "mba_emittance_optimization"
 
-HYBRID_INSTRUCTIONS = (
-    "For conversion of an accepted periodic MBA, read laboratory.mba_design "
-    "references/periodic_hybrid_api.md before choosing a numerical route. "
-    "The new match_periodic_hybrid method is an EXPERIMENTAL radiation-aware, fixed-topology "
-    "continuation of the exact parent. It is not yet a numerically demonstrated H7BA design. "
-    "The outer-replacement route in EXPERT.md H3 and references/outer_dba_api.md is an "
-    "alternative reconstruction hypothesis, not a mandatory conversion or proven remedy. "
-    "Do not change the working TME/conventional seed-generation pipeline or restart seed design. "
-    "First reproduce the exact accepted parent, including independent periodic optics and radiation. "
-    "Reserve finite SF_L/SD_L/SF_R/SD_R drift slots by physical names and global symmetry. "
-    "Use complete periodic-cell measurements, not independent guessed input Twiss. "
-    "For the periodic pilot pass end_fraction=0 first, then continue declared slot dispersion "
-    "and core Dx/H targets with ALL global mirror-paired KQUAD strengths available, including core. "
-    "No parent-tune equality, frozen-core-optics requirement, duplicate matcher ownership, or "
-    "universal dipole-to-dipole -I condition is imposed. "
-    "Supply scientist-approved absolute emittance, energy-spread, beta and engineering limits; "
-    "do not invent them or compound a relative degradation allowance at each continuation step. "
-    "Minimizing emittance WITH hard dispersion/slot/core constraints is appropriate during shaping; "
-    "minimizing emittance alone without those constraints does not request a hybrid shape. "
-    "On a failed step restore the last accepted candidate and reduce the target step. "
-    "Never carry a shape-only multi-nanometre solution forward as an acceptable low-emittance seed. "
-    "A stationary field-free drift plateau is valid; a narrow magnet peak is not installation space. "
-    "Preserve exact cell length, bend angle and ID length unless explicitly authorized to change them. "
-    "A stalled bounded fixed-topology pilot is not proof of physical impossibility. Any later "
-    "geometry release or outer replacement must be a separately declared hypothesis with the same caps. "
-    "Report progress, named failed constraints, exact candidate and immutable parent identity. "
-    "Keep request_satisfied=False for an unfinished hybrid-design request. "
-    "Final hybrid claims still require the unchanged full_hybrid gate on the exact candidate, "
-    "sampling-convergence and full-ring checks, followed by chromatic-strength/phase and nonlinear "
-    "validation as required by the scientist. Publish shape evidence as "
-    "run.finish(acceptance={'hybrid_mba_shape': report}, candidate_lattice=candidate). "
-    "Passing a software test or an intermediate continuation endpoint is not successful H7BA physics."
+CONVENTIONAL_LINEAR_INSTRUCTIONS = (
+    "For this fresh conventional-MBA prototype, implement the construction and matching in the "
+    "project's program using general tools and references/conventional_api.md. No stored design "
+    "or complete-design controller is available. Preserve the original machine contract. Publish "
+    "conventional_mba_linear evidence from verify_conventional_candidate: a real measured "
+    "modified-TME unit, its exact transfer into the assembled cell, and the exact final full-cell "
+    "JuTrack result. Analytical TME scalars, a toy seven-bend ring or a passed flag alone are not "
+    "that evidence. Show the unit optics, complete-cell optics, measured radiation and transfer "
+    "comparison. Partial evidence is useful; do not claim completion before verification. "
+    "This is a linear prototype, not proof of unrequested chromatic or nonlinear performance."
 )
+
+HYBRID_LINEAR_INSTRUCTIONS = (
+    "The requested outcome is a physically verified hybrid-MBA linear candidate, not a named "
+    "construction route. Use expert knowledge and general tools to write project-specific "
+    "construction, matching and objective code. Read references/hmba_outcome_api.md for final "
+    "measurement/evidence requirements. Preserve original limits, distinguish proposed targets, "
+    "and independently verify the exact selected rows. Use HybridMeasurement's shared physical-region "
+    "observables for search/checking and declare an approved radiation budget before production. "
+    "The solver, phase hypothesis and sequence remain choices. Publish measured outcome evidence under "
+    "hybrid_mba_linear. If chromatic correction or DA/MA was also requested, obtain its separate "
+    "computed evidence before completing that compound request; this gate certifies only linear shape."
+)
+
+MBA_OPTIMIZATION_INSTRUCTIONS = (
+    "Emittance optimization also needs mba_emittance_optimization evidence. Use any suitable "
+    "search, including local optimization or a handwritten objective with inner matching. Preserve "
+    "actual evaluations and independently measured baseline/selection as described in "
+    "references/hmba_outcome_api.md. No PSO generation schema is required. A single feasibility "
+    "evaluation is not a campaign; an unsuccessful campaign remains valid partial research."
+)
+
+_MBA = r"\b(?:\d+|m)\s*[-–]?\s*ba\b|\b(?:multi|\d+)\s*[-– ]?\s*bend\s+achromat\b"
+_HYBRID = r"\bh\s*[-–]?\s*(?:\d+|m)\s*ba\b|\bhybrid(?:ize|ise|ization|isation)?\b"
+_BUMPS = r"\b(?:two|2|double|paired)\s+(?:outer\s+)?dispersion\s+bumps\b"
+_NEGATION = r"\b(?:do\s+not|don't|not|never|without|no\s+need\s+to)\s+(?:(?:a|an|the)\s+)?$"
+
+
+def _positive_subject(pattern, text):
+    return next((match for match in re.finditer(pattern, text)
+                 if not re.search(_NEGATION, text[:match.start()])), None)
+
+
+def _design_intent(text, subject, *, allow_conversion=False):
+    if subject is None:
+        return False
+    prefix = text[:subject.start()]
+    if re.match(r"\s*(?:please\s+)?(?:what|why|explain|describe|how)\b", text):
+        return False
+    if re.search(r"\b(?:plot|show|list|inspect|report|calculate|compute|give|tell|measure|explain|describe|learn|understand)\b", prefix):
+        return False
+    if re.search(r"\b(?:plots?|figures?|tables?|parameters?|chromaticit(?:y|ies)|tunes?|survey|inventory|status|instructions?|tutorial)\b", prefix):
+        return False
+    verbs = r"design|build|construct|create|make|generate|produce"
+    if allow_conversion:
+        verbs += r"|form|shape|convert|transform|hybridize|hybridise|optimize|optimise"
+    actions = list(re.finditer(rf"\b(?:{verbs})\b", text))
+    if any(re.search(_NEGATION, text[:match.start()]) for match in actions):
+        return False
+    desired = bool(re.search(r"\b(?:need|want|require|would\s+like|would\s+prefer)\b", prefix))
+    if not allow_conversion and re.search(r"\b(?:existing|current|accepted|saved)\b", prefix):
+        desired = False
+    chinese = any(word in text for word in ("设计", "构建", "构造", "生成"))
+    return bool(actions or desired or chinese)
 
 
 def is_hybrid_shape_request(request: str) -> bool:
-    """Recognize explicit shape-making requests, not project names or inspections."""
     text = str(request).casefold()
-    hybrid = bool(re.search(r"\bh\s*[-–]?\s*(?:\d+|m)\s*ba\b|\bhybrid(?:ize|ise|ization|isation)?\b", text))
-    bumps = bool(re.search(r"(?:two|2|double|paired)\s+(?:outer\s+)?dispersion\s+bumps", text))
-    action = bool(re.search(
-        r"\b(?:build|create|make|form|shape|convert|transform|design|produce|generate|hybridize|hybridise)\b",
-        text,
-    ))
-    conceptual = bool(re.match(r"\s*(?:what\b|why\b|explain\b|describe\b|how\s+(?:does|do|is|are|can|to)\b)", text))
-    negated = bool(re.search(r"\b(?:do\s+not|don't|never|without)\s+(?:\w+\s+){0,2}(?:build|create|make|form|design|hybridize|hybridise)\b", text))
-    chinese_action = any(word in text for word in ("设计", "构建", "构造", "改成", "形成", "生成"))
-    return bool((hybrid or bumps) and (action or chinese_action) and not conceptual and not negated)
+    subject = _positive_subject(_HYBRID, text) or _positive_subject(_BUMPS, text)
+    return _design_intent(text, subject, allow_conversion=True)
 
 
-def hybrid_optimization_warnings(source: str) -> list[str]:
-    """Warn about visible objective mismatches without guessing callback behavior."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return []  # The application's generic source preflight owns syntax errors.
-    emittance_names = {"emittance", "emittance_pm", "emittance_pm_rad", "emittance_m_rad",
-                       "natural_emittance_pm", "epsilon_x", "eps_x", "epsx", "eps_pm"}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        name = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id if isinstance(node.func, ast.Name) else ""
-        if name not in {"particle_swarm_optimize", "optimize_lattice_parameters"}:
-            continue
-        for keyword in node.keywords:
-            if keyword.arg != "objective_names":
-                continue
-            try:
-                names = ast.literal_eval(keyword.value)
-            except (TypeError, ValueError, SyntaxError):
-                continue
-            if isinstance(names, (list, tuple)) and names and all(isinstance(item, str) and item.casefold() in emittance_names for item in names):
-                return [
-                    "The H-MBA request needs explicit slot/dispersion/core and machine constraints. "
-                    "An emittance objective is appropriate when those constraints are active throughout "
-                    "the solve; unconstrained emittance minimization does not request hybridization. "
-                    "Inspect the callback contract and exact candidate evidence. This is advisory: "
-                    "static objective-name inspection cannot establish whether constraints are present."
-                ]
-    return []
+def is_hybrid_linear_request(request: str) -> bool:
+    return is_hybrid_shape_request(request)
+
+
+def is_conventional_mba_design_request(request: str) -> bool:
+    text = str(request).casefold()
+    return (_positive_subject(_HYBRID, text) is None
+            and _design_intent(text, _positive_subject(_MBA, text)))
+
+
+def is_mba_emittance_optimization_request(request: str) -> bool:
+    text = str(request).casefold()
+    return is_hybrid_linear_request(text) and bool(re.search(
+        r"\boptimi[sz](?:e|ed|ation|ing)\b.{0,70}\bemittance\b|"
+        r"\bemittance\b.{0,70}\boptimi[sz](?:e|ed|ation|ing)\b|"
+        r"\bminimi[sz](?:e|ed|ation|ing)\b.{0,70}\bemittance\b", text)
+        or ("优化" in text and "发射度" in text))

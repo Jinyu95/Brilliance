@@ -24,5 +24,11 @@
 .workspace-open .main-panel { width: calc(100% - 652px); margin-right: 420px; }
 .workspace-open .composer-dock { right: 420px; }
 .session-queue { color: var(--accent); font-size: 12px; padding: 8px 0; }
+.scientific-context, .evidence-receipt { color: var(--muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.selected-evidence-label { color: var(--accent); font-size: 12px; padding: 6px 0; }
+.evidence-methods, .alternative-results, .detailed-evidence-table { margin: 10px 0; color: var(--muted); font-size: 12px; }
+.evidence-methods summary, .alternative-results summary, .detailed-evidence-table summary { cursor: pointer; line-height: 1.6; }
+.alternative-result { margin: 10px 0; padding: 8px 12px; border-left: 2px solid var(--line); }
+.alternative-result p { color: var(--text); line-height: 1.6; }
 @media (max-width: 1150px) { .workspace-open .main-panel { width: calc(100% - 232px); margin-right: 0; } .workspace-open .composer-dock { right: 0; } .workspace-panel { box-shadow: -12px 0 35px #0002; } }
 @media (max-width: 760px) { .main-panel, .workspace-open .main-panel { width: 100%; margin-left: 0; } .composer-dock { left: 0; } .workspace-panel { width: min(100%, 480px); } .topbar { flex-wrap: wrap; height: auto; min-height: 58px; padding: 10px; } }

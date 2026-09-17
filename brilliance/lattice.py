@@ -32,6 +32,68 @@ class LatticeTopologyError(LatticeInputError):
     """
 
 
+class LatticeScopeError(LatticeInputError):
+    """Stored cell/ring scope metadata contradicts the physical element sequence."""
+
+
+def lattice_cell_partition(lattice: LatticeIR) -> tuple[int, int]:
+    """Validate the declared stored partition without guessing or changing rows.
+
+    Return (elements per stored cell, number of stored cells). Intended future
+    repetitions are not stored cells. Legacy artifacts stay readable; callers
+    use this check before extracting, computing, or publishing a new lattice.
+    This is a representation check, not a beam-physics or bend-closure gate.
+    """
+    metadata = lattice.metadata
+    size = len(lattice.elements)
+
+    def fail(reason: str) -> None:
+        raise LatticeScopeError(
+            f"{reason} Stored elements={size}, periodicity={lattice.periodicity}, "
+            f"repetitions={metadata.get('repetitions')!r}, "
+            f"cell_element_count={metadata.get('cell_element_count')!r}, "
+            f"evaluation_scope={metadata.get('evaluation_scope')!r}. "
+            "For ONE cell use api.periodic_cell(elements=cell_rows, intended_repetitions=P); "
+            "for an explicit repeated ring use api.cell_ring(cell=cell_rows, periods=P). "
+            "Inspect the saved construction source to choose the scope. No elements were "
+            "sliced, padded, repeated, renamed or changed."
+        )
+
+    def positive_integer(value: Any, name: str) -> int:
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            fail(f"{name} must be a positive integer.")
+        if isinstance(value, bool) or not math.isfinite(number) or number < 1 or not number.is_integer():
+            fail(f"{name} must be a positive integer.")
+        return int(number)
+
+    periods = positive_integer(metadata.get("repetitions", lattice.periodicity), "repetitions")
+    if periods != lattice.periodicity:
+        fail("Stored repetitions disagree with periodicity.")
+    if "intended_repetitions" in metadata:
+        positive_integer(metadata["intended_repetitions"], "intended_repetitions")
+    if metadata.get("evaluation_scope") == "periodic_cell":
+        if periods != 1 or metadata.get("ring_complete") is True:
+            fail("A periodic_cell must store one cell, not an expanded ring.")
+        count = positive_integer(metadata.get("cell_element_count", size), "cell_element_count")
+        if count != size:
+            fail("A periodic_cell must contain its complete declared element sequence.")
+        return count, 1
+    if metadata.get("evaluation_scope") == "full_ring" and metadata.get("ring_complete") is False:
+        fail("Full-ring and incomplete-cell declarations conflict.")
+    declared = metadata.get("cell_element_count")
+    if declared is None:
+        if size % periods:
+            fail("The stored sequence cannot be divided into the declared number of cells.")
+        count = size // periods
+    else:
+        count = positive_integer(declared, "cell_element_count")
+    if count < 1 or count * periods != size:
+        fail("cell_element_count times stored repetitions must equal the stored element count.")
+    return count, periods
+
+
 def require_same_lattice_topology(expected: Iterable[Mapping[str, Any]],
                                   proposed: Iterable[Mapping[str, Any]], *,
                                   operation: str = "JuTrack editor") -> None:

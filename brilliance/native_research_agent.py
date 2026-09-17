@@ -24,14 +24,15 @@ import httpx
 
 from .artifacts import json_safe
 from .codex_backends import CodexBackend
+from .coding_policy import SCIENTIFIC_CODING_POLICY
 from .experts import ExpertRegistry
 from .model_protocol import (
     REJECTION_MESSAGES,
     _finite_float,
     _invalid_constant,
     _unique_object,
-    save_rejected_response,
     safe_response_metadata,
+    save_rejected_response,
     validate_tool_batch,
 )
 from .research_program import inspect_research_program
@@ -287,7 +288,7 @@ _TOOLS = tuple({**tool, "function": {**tool["function"], "parameters": {
 _POPULATION_OPTIMIZER_CALLS = frozenset(
     {"optimize_lattice_parameters", "particle_swarm_optimize"}
 )
-_DURABLE_PROGRAM_CALLS = _POPULATION_OPTIMIZER_CALLS
+_DURABLE_PROGRAM_CALLS = _POPULATION_OPTIMIZER_CALLS | {"match_jutrack_line"}
 
 
 def supports_native_research_agent(backend: CodexBackend) -> bool:
@@ -300,7 +301,7 @@ def supports_native_research_agent(backend: CodexBackend) -> bool:
 
 def _requires_durable_execution(inspection: Mapping[str, Any]) -> bool:
     calls = {str(item) for item in inspection.get("detected_calls", [])}
-    return bool(calls & _DURABLE_PROGRAM_CALLS)
+    return bool(calls & _DURABLE_PROGRAM_CALLS) or inspection.get("durable_required") is True
 
 
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -347,53 +348,111 @@ def _api_sections(reference: str) -> list[tuple[str, str]]:
     return sections
 
 
+def _new_contract_hints(inspection: Mapping[str, Any], seen: dict[str, str]) -> dict[str, Any]:
+    """Deliver each installed result contract once per live editing turn."""
+    result = dict(inspection)
+    fresh, unchanged = {}, []
+    for name, schema in inspection.get("installed_return_contracts", {}).items():
+        fingerprint = hashlib.sha256(json.dumps(schema, sort_keys=True).encode("utf-8")).hexdigest()
+        if seen.get(name) == fingerprint:
+            unchanged.append(name)
+        else:
+            fresh[name] = schema
+            seen[name] = fingerprint
+    result["installed_return_contracts"] = fresh
+    if unchanged:
+        result["unchanged_return_contracts"] = unchanged
+    return result
+
+
 def api_help(reference: str, query: str, *, max_chars: int = 12_000,
-             expert_registry: ExpertRegistry | None = None) -> str:
+             expert_registry: ExpertRegistry | None = None,
+             jutrack_source: Path | str | None = None) -> str:
     """Return the most relevant complete reference sections for one query."""
 
     if max_chars <= 0:
         return ""
+    from . import accelerator_api
+    if jutrack_source is not None:
+        from .local_jutrack_help import render_reference
+        explicitly_native = bool(re.search(r"\b(?:jt\.|pyJuTrack|native JuTrack|JuTrack native)", query, re.I))
+        core_names = {name.casefold() for name in dir(accelerator_api)}
+        native_query = query if explicitly_native else " ".join(
+            token for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", query)
+            if token.casefold() not in core_names)
+        try:
+            native_reference = render_reference(jutrack_source, query=native_query, max_chars=max_chars)
+        except (OSError, UnicodeError, SyntaxError, ValueError) as exc:
+            native_reference = (
+                "Configured native JuTrack source reference is unavailable: "
+                + type(exc).__name__ + ". The application must repair its configured reference; "
+                "do not discover another runtime or guess a native return schema."
+                if explicitly_native
+                else "")
+        if native_reference:
+            return native_reference
     tokens = {
         item.casefold()
         for item in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", str(query))
         if item.casefold() not in {"the", "and", "for", "with", "from", "how", "use"}
     }
-    ranked: list[tuple[int, int, str]] = []
-    for index, (title, section) in enumerate(_api_sections(reference)):
-        lowered = section.casefold()
-        score = sum(8 if token in title.casefold() else lowered.count(token) for token in tokens)
-        if score:
-            ranked.append((score, -index, section))
-    if not ranked:
-        ranked = [(0, -index, section) for index, (_, section) in enumerate(_api_sections(reference))]
-    from . import accelerator_api
-
+    sections = [(0, index, title, section)
+                for index, (title, section) in enumerate(_api_sections(reference)) if section.strip()]
     signatures: list[str] = []
+    contracts: list[str] = []
+    exact_symbols: set[str] = set()
+    parameter_symbols: set[str] = set()
+
+    def add_signature(label, target):
+        from .result_contracts import render_parameter_contracts, render_return_contract
+        signature = inspect.signature(target)
+        signatures.append(f"{label}{signature}")
+        exact_symbols.add(label.rsplit(".", 1)[-1].casefold())
+        parameter_symbols.update(set(signature.parameters) & tokens)
+        input_contract = render_parameter_contracts(target, max_depth=3)
+        if input_contract:
+            contracts.append(label + " — installed input contract:\n" + input_contract)
+        result_contract = render_return_contract(target, max_depth=3)
+        if result_contract:
+            contracts.append(label + " — installed return contract:\n" + result_contract)
+        contract = inspect.getdoc(target)
+        if contract:
+            if len(contract) > 2400:
+                contract = contract[:2400] + "\n[Docstring truncated; read the staged API reference or request this method alone.]"
+            contracts.append(label + ":\n" + contract)
+
+    from .research_api import ResearchRun
+    for name in sorted(tokens):
+        target = getattr(ResearchRun, name, None)
+        if name.startswith("_") or not callable(target):
+            continue
+        add_signature(f"run.{name}", target)
     for name in sorted(tokens):
         target = next((getattr(accelerator_api, key) for key in dir(accelerator_api)
                        if not key.startswith("_") and key.casefold() == name), None)
-        if target is None or not callable(target):
+        if (target is None or not callable(target)
+                or not str(getattr(target, "__module__", "")).startswith("brilliance.")):
             continue
         try:
-            signatures.append(f"api.{target.__name__}{inspect.signature(target)}")
-            contract = inspect.getdoc(target)
-            if contract:
-                signatures.append(contract[:2400])
+            add_signature(f"api.{target.__name__}", target)
             if inspect.isclass(target):
                 for method in sorted(tokens):
                     member = getattr(target, method, None)
                     if callable(member):
-                        signatures.append(f"{target.__name__}.{method}{inspect.signature(member)}")
-                        contract = inspect.getdoc(member)
-                        if contract:
-                            signatures.append(contract[:2400])
+                        add_signature(f"{target.__name__}.{method}", member)
         except (ValueError, TypeError, AttributeError):
             continue
     if expert_registry is not None:
         for module in expert_registry.modules:
             library = expert_registry.python_library(module.id)
             module_requested = module.id.casefold() in str(query).casefold()
-            requested_names = {name.casefold() for name in dir(library) if name.casefold() in tokens}
+            visible_names = set(dir(library))
+            explicit_names = {
+                name for name in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(query))
+                if not name.startswith("_") and callable(getattr(library, name, None))
+            }
+            requested_names = ({name.casefold() for name in visible_names if name.casefold() in tokens}
+                               | {name.casefold() for name in explicit_names})
             if module_requested or requested_names:
                 # Expert APIs need their own result schemas and examples, not an
                 # unrelated core reference selected merely because it mentions optics.
@@ -406,36 +465,61 @@ def api_help(reference: str, query: str, *, max_chars: int = 12_000,
                     locator = (f"Module reference: read_expert(module_id={module.id!r}, "
                                f"asset_id={asset.id!r}, offset=0, limit=12000)\n")
                     for index, (title, section) in enumerate(_api_sections(source)):
-                        lowered = section.casefold()
-                        score = sum(8 if token in title.casefold() else lowered.count(token) for token in tokens)
-                        if score or module_requested:
-                            ranked.append((1000 + score, -index, locator + section))
-            for name in dir(library):
+                        sections.append((1000, index, title, locator + section))
+            for name in sorted(visible_names | explicit_names):
                 if not module_requested and name.casefold() not in tokens:
                     continue
                 target = getattr(library, name)
-                signatures.append(f"api.expert_module({module.id!r}).{name}{inspect.signature(target)}")
-                contract = inspect.getdoc(target)
-                if contract:
-                    signatures.append(contract[:2400])
+                add_signature(f"api.expert_module({module.id!r}).{name}", target)
                 if inspect.isclass(target):
                     for method in sorted(tokens):
                         member = getattr(target, method, None)
                         if callable(member) and not method.startswith("_"):
-                            signatures.append(f"{name}.{method}{inspect.signature(member)}")
-                            contract = inspect.getdoc(member)
-                            if contract:
-                                signatures.append(contract[:2400])
+                            add_signature(f"{name}.{method}", member)
+    def matches(text, names):
+        return {name for name in names if re.search(r"(?<![\w])" + re.escape(name) + r"(?![\w])", text, re.I)}
+
+    # Exact API requests are not keyword searches. Incidental repetitions of
+    # "element", "periodic" or "result" must not outrank the requested contract.
+    # Explicit snake_case names may be documented result fields or object methods
+    # rather than top-level functions. Keep these requests instead of dropping a
+    # field table once a call example happens to mention its parent parameter.
+    requested = exact_symbols | parameter_symbols | {name for name in tokens if "_" in name}
+    ranked = []
+    for priority, index, title, section in sections:
+        matched = matches(section, requested if requested else tokens)
+        if not matched:
+            continue
+        direct_calls = {name for name in exact_symbols
+                        if re.search(r"\b" + re.escape(name) + r"\s*\(", section, re.I)}
+        score = len(matched) + 8 * len(matches(title, tokens))
+        ranked.append((score, -index, section, matched, priority, direct_calls))
     selected: list[str] = []
     if signatures:
-        block = "Exact installed API signatures (authoritative):\n" + "\n".join(signatures)
+        # Put every declaration before long docstrings so one class/docstring
+        # cannot silently hide later functions in a multi-symbol request.
+        block = ("Exact installed API signatures (authoritative):\n" + "\n".join(signatures)
+                 + "\n\n" + "\n\n".join(contracts))
         budget = min(max_chars, max(1000, max_chars // 2))
         if len(block) > budget:
             notice = "\n[Signature help truncated; request one function/method for its complete contract.]"
             block = block[:max(0, budget - len(notice))] + notice[:budget]
         selected.append(block)
     used = sum(len(item) + 2 for item in selected)
-    for _, _, section in sorted(ranked, reverse=True):
+    covered: set[str] = set()
+    while ranked:
+        def rank(item):
+            score, index, section, matched, priority, direct_calls = item
+            if requested:
+                new = matched - covered
+                score = 100 * len(new & exact_symbols) + 100 * len(new & direct_calls) + len(new - exact_symbols)
+            return priority + score, -len(section), index
+
+        item = max(ranked, key=rank)
+        ranked.remove(item)
+        _, _, section, matched, _, _ = item
+        if requested and not (matched - covered):
+            continue
         remaining = max_chars - used
         if remaining <= 0:
             break
@@ -445,10 +529,22 @@ def api_help(reference: str, query: str, *, max_chars: int = 12_000,
             notice = "\n[Reference truncated; follow its read_expert locator or narrow the api_help query.]"
             text = section[:max(0, remaining - len(notice))] + notice[:remaining]
         selected.append(text)
+        covered.update(matched)
         used += len(text) + 2
-        if len(selected) >= 3:
+        if len(selected) >= 3 or (requested and requested <= covered):
             break
-    return "\n\n".join(selected)
+    result = "\n\n".join(selected)
+    if not result:
+        return "No matching installed API signature or reference section; request an exact symbol or read the staged API reference."[:max_chars]
+    documented = set().union(*(matches(section, requested) for _, _, _, section in sections))
+    unresolved = requested - exact_symbols - documented
+    if unresolved:
+        notice = "\n\nNo installed signature or reference match for: " + ", ".join(sorted(unresolved)) + ". No contract was inferred."
+        if len(result) + len(notice) > max_chars:
+            notice = "\n[API help truncated to retain unresolved-name notice.]" + notice
+            result = result[:max(0, max_chars - len(notice))]
+        result += notice[:max_chars - len(result)]
+    return result
 
 
 def _compact_table(table: Mapping[str, Any]) -> dict[str, Any]:
@@ -574,18 +670,18 @@ def _brief_error(stderr: str, stdout: str = "") -> str:
                 pass
     if isinstance(payload, Mapping) and payload.get("error"):
         text = str(payload["error"])
-    text = text.replace("\\n", "\n").replace('\\"', '"')
-    markers = re.findall(
-        r"(?:AssertionError|AttributeError|IndexError|KeyError|RuntimeError|"
-        r"TypeError|ValueError):[^\r\n]+",
-        text,
-    )
-    headline = markers[-1] if markers else (text.splitlines()[-1] if text else "unknown error")
+    # JSON decoding above already handles encoded newlines/quotes. A second
+    # unescape corrupts real Windows paths such as \numerical_checkpoints or
+    # \new_candidate.json and hides the missing filename from the repair turn.
+    from .failure_diagnostics import execution_failure_summary
+    headline = execution_failure_summary(text)
     locals_line = next(
         (line for line in reversed(text.splitlines()) if "BRILLIANCE_FAILURE_LOCALS=" in line),
         "",
     )
-    return (headline + ("\n" + locals_line if locals_line else ""))[-6000:]
+    if len(headline) + len(locals_line) + 1 > 6000:
+        locals_line = ""  # Keep the cause; never emit a truncated JSON record.
+    return headline + ("\n" + locals_line if locals_line else "")
 
 
 def _result_ready_for_answer(receipt: Mapping[str, Any]) -> bool:
@@ -614,6 +710,31 @@ def _result_ready_for_answer(receipt: Mapping[str, Any]) -> bool:
             or receipt.get("candidate_lattice")
         )
     )
+
+
+def _completion_proof(evidence: Mapping[str, Any], *, decision_authority: str) -> dict[str, Any]:
+    """Bind both explicit and normal prose completion to the same exact receipt."""
+    if not (evidence.get("kind") == "completed_execution"
+            and evidence.get("execution_valid") is True
+            and evidence.get("scientific_passed") is True
+            and evidence.get("status") == "completed"
+            and evidence.get("run_id")):
+        raise ValueError("Completion provenance requires a valid completed scientific receipt")
+    return {
+        "kind": "scientist_request_completion_from_saved_evidence",
+        "evidence_run_id": evidence["run_id"],
+        "evidence_receipt_sha256": hashlib.sha256(
+            json.dumps(json_safe(evidence), sort_keys=True).encode("utf-8")).hexdigest(),
+        "evidence_full_result": evidence.get("full_result"),
+        "evidence_candidate_lattice": evidence.get("candidate_lattice"),
+        "working_lattice_action": evidence.get("working_lattice_action"),
+        "program_request_satisfied": evidence.get("request_satisfied"),
+        "scientific_acceptance": compact_scientific_acceptance(
+            evidence.get("validation", {}).get("scientific_acceptance", {})
+            if isinstance(evidence.get("validation"), Mapping) else {}),
+        "execution_valid": True, "scientific_passed": True,
+        "decision_authority": decision_authority,
+    }
 
 
 def _dsml_tool_calls(content: str, *, step: int) -> list[dict[str, Any]]:
@@ -898,18 +1019,14 @@ async def run_native_research_agent(
         raise NativeResearchAgentError(f"{backend.name} has no native research-agent endpoint")
     registry = (expert_registry if expert_registry is not None else
                 load_expert_registry(project_directory=project_root / project_id))
-    system = """You are Brilliance's accelerator-research coding agent. Answer a purely conceptual
+    system = SCIENTIFIC_CODING_POLICY + """
+You are Brilliance's accelerator-research coding agent. Answer a purely conceptual
 request directly from supplied expert knowledge or saved evidence. When the request asks for a
 calculation, plot, lattice inspection/change, or unsaved numerical value, write short task-specific
-Python and run it through the configured JuTrack worker. Do not inspect, discover, install, or
-repair Python, Julia, JuTrack, or packages;
-the public API and worker are already configured. Use api_help for exact signatures. Execute early
-and revise from the returned numerical evidence or exact error instead of producing a large
-one-shot program. API contracts are authoritative: do not execute programs merely to discover
-schemas, callback arguments, installed functions, or artifact paths. Expert context is guidance,
-not a mandatory workflow. Prefer the documented generic parameterization, matching, PSO/MOPSO,
-and mutable-lattice helpers over hand-written replacements; use SciPy directly only for genuinely
-task-specific numerical logic. Never make a numerical
+Python and run it through the configured JuTrack worker after inspecting the necessary input and
+API contract. Use api_help for exact public or native JuTrack signatures. Write and test the
+actual small scientific calculation or callback, not an environment/schema-discovery program.
+Native JuTrack source help is read-only and does not start Julia. Never make a numerical
 beam-dynamics claim without a JuTrack-backed execution. A valid calculation and achievement of a
 requested design target are different facts. Every run.finish call must set request_satisfied=False
 for an intermediate result or request_satisfied=True only when the current scientist request has
@@ -931,6 +1048,10 @@ must construct its own candidate from the scientist's contract and analytic phys
 lattice already created or explicitly imported in this scientist's project may be continued.
 Every stage that constructs, matches, optimizes, or edits a lattice must pass the exact resulting LatticeIR to
 run.finish(candidate_lattice=...). Choose the exact archived input by object scope and identity.
+For a candidate's numerical claims, pass candidate_evaluation=the_exact_evaluation to finish.
+Evaluate the final matched rows, not the original proposal. A unit's evaluation cannot validate
+its assembled ring. Unbound/mismatched snapshots remain archived, not selected; follow the
+receipt's next action to verify only the missing final snapshot, not repeat its optimization.
 run.working_lattice_file and run.latest_candidate_lattice_file are conveniences ONLY when they
 refer to the intended object; the latest complete ring must not be mistaken for its earlier unit.
 Load older inputs from the saved lattice inventory with api.load_lattice(run.workspace / path),
@@ -948,11 +1069,16 @@ print private deliberation or XML/DSML tool syntax into chat."""
     system += """
 Useful progress explains a decision, a computed change against the previous candidate, a failed
 requirement, or the next evidence-producing action. Use update_user for these concise milestones.
+Use run.progress scientific stage/hypothesis/candidate identities for measured milestones and
+keep operational updates as activity. The final answer must identify the selected candidate and
+its measured outcome, distinguish discarded alternatives, and state what remains unproven.
 Do not narrate repeated reconsideration, arithmetic scratch work, or API speculation. Analytical
 references must publish their values; an object attribute list is not a physics calculation.
-Follow the constructive method in relevant expert knowledge rather than merely using its labels.
-An incomplete method excerpt is not a complete construction recipe: retrieve the remaining pages
-with read_expert before implementing that method. Do not guess omitted topology or matching steps.
+When using a documented specialist method, implement its actual assumptions and numerical steps,
+not merely its label. Retrieve any missing pages of that selected contract with read_expert.
+Write your own implementation while retaining the selected method's physical initialization and
+evidence requirements. A different route needs explicit scientist direction or a documented
+evidence-backed reason, not just a simpler builder with the same task label.
 When a background result is intermediate, continue the original request after interpreting it.
 A paragraph announcing the next calculation does not complete that request. Use pause_research
 only when a real decision or blocker prevents authorized progress; do not ask for a generic continue.
@@ -986,7 +1112,9 @@ rewriting a whole program. These are transport rules, not a prescribed scientifi
     reference_query = "\n".join(
         (project_goal, scientist_message, expert_context[:4_000])
     )
-    relevant_api = api_help(api_reference, reference_query, max_chars=12_000, expert_registry=registry)
+    jutrack_source = process_environment.get("JUTRACK_PYTHON") or None
+    relevant_api = api_help(api_reference, reference_query, max_chars=12_000,
+                           expert_registry=registry, jutrack_source=jutrack_source)
     user = f"""PROJECT GOAL
 {project_goal.strip()}
 
@@ -1139,6 +1267,8 @@ REQUEST-RELEVANT PUBLIC API
                 "observation": observation,
                 "instruction": "This exact lookup returned unchanged evidence already supplied twice. Choose a different pointer/question, act on the evidence, or explain the actual result; repeating it cannot advance the request."}, observation
 
+    delivered_contracts: dict[str, str] = {}
+
     def inspect_current_program(relative: str) -> dict[str, Any]:
         inspection = dict(inspect_research_program(workspace, relative, expert_registry=registry))
         source_path = workspace / relative
@@ -1149,7 +1279,7 @@ REQUEST-RELEVANT PUBLIC API
             )
             if warnings:
                 inspection["warnings"] = warnings
-        return inspection
+        return _new_contract_hints(inspection, delivered_contracts)
 
     async def execute_tool(name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         nonlocal execution_attempts, completed_executions, managed_job_id, last_error
@@ -1203,16 +1333,7 @@ REQUEST-RELEVANT PUBLIC API
                         "acceptance_issues": acceptance_issues,
                         "instruction": "Preserve the valid evidence. Address the unmet installed expert checks; do not repeat a baseline or claim completion without the required evidence.\n"
                         + acceptance_instructions(acceptance_requirements, registry=registry)}
-            proof = {
-                "kind": "scientist_request_completion_from_saved_evidence",
-                "evidence_run_id": evidence_id,
-                "evidence_receipt_sha256": hashlib.sha256(json.dumps(json_safe(evidence), sort_keys=True).encode("utf-8")).hexdigest(),
-                "evidence_full_result": evidence.get("full_result"),
-                "evidence_candidate_lattice": evidence.get("candidate_lattice"),
-                "program_request_satisfied": evidence.get("request_satisfied"),
-                "execution_valid": True, "scientific_passed": True,
-                "decision_authority": "model_assessment_of_current_scientist_request_scope",
-            }
+            proof = _completion_proof(evidence, decision_authority="model_assessment_of_current_scientist_request_scope")
             # A completion decision must not silently masquerade as selection.
             # Use the committed execution action, never a model-authored claim
             # that a saved candidate has become the working lattice.
@@ -1251,7 +1372,7 @@ REQUEST-RELEVANT PUBLIC API
                         "instruction": "This exact reference was already supplied in this turn. Use its installed signatures to write or patch the saved program. Repeating the lookup adds no evidence."}
             help_cache.add(identity)
             return {"ok": True, "query": query, "reference": api_help(
-                api_reference, query, expert_registry=registry)}
+                api_reference, query, expert_registry=registry, jutrack_source=jutrack_source)}
         if name == "read_artifact":
             return {"ok": True, **read_workspace_artifact(
                 workspace, str(arguments.get("path", "")),
@@ -1345,7 +1466,6 @@ REQUEST-RELEVANT PUBLIC API
         inspection = inspect_current_program(relative)
         if not inspection.get("passed"):
             return {"ok": False, "error": "program preflight failed", "preflight": inspection}
-        detected_calls = set(inspection.get("detected_calls", ()))
         background = bool(arguments.get("background", False))
         automatically_backgrounded = _requires_durable_execution(inspection) and not background
         if automatically_backgrounded:
@@ -1384,7 +1504,6 @@ REQUEST-RELEVANT PUBLIC API
                     "script": relative,
                     "arguments": json_safe(run_arguments),
                     "timeout_s": timeout_s,
-                    "require_optimizer_evidence": bool(detected_calls & _POPULATION_OPTIMIZER_CALLS),
                 },
                 ensure_ascii=False,
                 allow_nan=False,
@@ -1749,6 +1868,13 @@ REQUEST-RELEVANT PUBLIC API
                     "Existing evidence is preserved, but does not establish completion. "
                     + "; ".join(unmet_acceptance)
                 )
+            completion_proof = None
+            if (content and not prior_requires_assessment and not last_error
+                    and not unmet_acceptance and _result_ready_for_answer(last_receipt)):
+                completion_proof = _completion_proof(
+                    last_receipt, decision_authority="prose_completion_after_validated_request_result",
+                )
+                record("request_completed", {"completion_evidence": completion_proof})
             return NativeResearchAgentResult(
                 response=response,
                 execution_attempts=execution_attempts,
@@ -1762,6 +1888,7 @@ REQUEST-RELEVANT PUBLIC API
                 ),
                 managed_job_id=managed_job_id,
                 last_error=last_error,
+                completion_evidence=completion_proof,
             )
         ready_this_step = False
         steered_this_step = False

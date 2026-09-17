@@ -229,13 +229,37 @@ each completed generation is checkpointed, and a compatible rerun resumes automa
 program uses `run.optimization_options(...)`. This prevents a cancellation or worker failure from
 discarding completed accelerator calculations.
 
-If a background program encounters a repairable Python coding error, Brilliance returns the
-saved source and diagnostic to the agent automatically. The chat shows a short repair update;
-the full traceback remains in `workspace/runtime_failures/`. Repairs preserve existing numerical
-results and cannot change the configured interpreter or physical requirements. The default limit
-is two attempts per user request (`BRILLIANCE_AUTO_REPAIR_ATTEMPTS=2`; use `0` to disable).
-Unchanged failing source is not repeatedly retried. Environment failures, physics infeasibility,
-user cancellation, and superseding requests do not trigger automatic code repair.
+New PSO/MOPSO campaigns use generous defaults. Configure search effort in
+`brilliance/config/research_runtime.toml`:
+
+```toml
+[optimization]
+minimum_population = 500
+minimum_population_per_knob = 10
+minimum_generations = 80
+```
+
+The effective population is the larger of the two population limits. Managed programs
+raise smaller model requests and show the effective budget before searching. Lower these
+settings yourself for an intentionally small test. Existing checkpoint populations remain
+unchanged; a new named campaign is needed to increase a saved population. These are search
+budgets, not a guarantee of convergence or a limit on the lifetime of a running job.
+
+Candidate geometry tables are calculated from exact saved element lengths and declared
+repetitions, independently of optics success. Targets, unit-reference rings, projected
+circumference and explicitly constructed rings are labelled separately. Contradictory or
+unbound geometry reports remain archived for diagnosis but cannot certify a design.
+
+Failed saved programs return to the agent for **diagnosis first**, without an exception whitelist.
+The agent inspects the traceback, source, inputs and checkpoints before repairing project code,
+reporting a numerical limitation, or asking for needed platform intervention. The chat shows
+the actual exception; full diagnostics remain in `workspace/runtime_failures/`. Completed work
+is recovered rather than repeated. Runtime/access problems permit read-only diagnosis, not
+package installation, interpreter/configuration changes, weakened physics limits or fabricated results.
+The default is two recovery attempts per user request (`BRILLIANCE_AUTO_REPAIR_ATTEMPTS=2`;
+use `0` to disable). The same failing source, inputs and error do not trigger repeated handoffs.
+User cancellation, pause and superseding requests take precedence. A numerical rejection is
+not automatically a coding bug, and a changed objective needs a new optimization campaign.
 
 Completed background programs also return their saved evidence to the agent for interpretation
 and, if needed, the next calculation within your request. This is bounded by
@@ -260,10 +284,20 @@ The scientific runtime is independent of the interface. The active architecture 
 | saved-program runner | fixed interpreter, immutable code and arguments, progress, cancellation, typed results, and artifacts |
 | project archive and chat | persistent thread, history, lattice revisions, evidence, tables, plots, and managed jobs |
 
-There is no built-in `design 7BA`, `optimize conventional MBA`, or `plot tracking` state machine.
+New research is not dispatched to a compulsory `design 7BA`, `optimize conventional MBA`,
+or `plot tracking` procedure. The older MBA design controllers and their compatibility
+exports have been removed, not hidden. Existing project files and results are retained,
+but old programs calling those APIs need explicit review and adaptation before replay;
+Brilliance does not silently migrate their source or substitute a different calculation.
 The program defines its own data structure, element knobs, objective function, matching logic, and
 evidence based on the request and retrieved knowledge. A 6BA, 9BA, orbit study, RF problem, error
 ensemble, or unforeseen analysis therefore uses the same substrate.
+
+The agent may read the necessary API contract before writing code. Local JuTrack help is
+generated from the configured wrapper without starting Julia or searching the internet.
+Matching and optimization check callback contracts early; programming errors are not counted
+as unstable physics candidates. Acceptance checks the requested physical outcomes, not which
+design class or optimization algorithm produced them.
 
 JuTrack remains the numerical authority for beam dynamics. Generic validation checks the saved
 program identity and result/artifact structure; scientific authority comes from the documented
@@ -294,9 +328,9 @@ the topic's physics rules.
 
 See the [expert authoring guide](docs/EXPERT_AUTHORING_GUIDE.md).
 
-The MBA note includes a constructive modified-TME unit method, not a stored lattice.
-See [method validation and current limitations](docs/modified_tme_validation.md) for
-reproducible JuTrack checks and the distinction between a unit seed and a complete MBA design.
+The [conventional MBA knowledge](expert_modules/mba_design/references/conventional_api.md)
+describes fresh measured TME/M-TME initialization, independent terminal matching and complete-cell
+diagnosis. It supplies physical reasoning for project-written code, not a stored lattice.
 
 ```powershell
 & '.\.venv\Scripts\python.exe' -m brilliance.expert_cli doctor expert_modules\mba_design
@@ -367,10 +401,18 @@ Unit tests do not establish autonomous design readiness. Test the actual welcome
 in a separate project, with your configured model and research internet access disabled:
 
 ```powershell
-& '.\.venv\Scripts\python.exe' scripts/validate_default_task.py start --root research_runs_default_validation
+& '.\.venv\Scripts\python.exe' scripts/validate_default_task.py start --root research_runs_new_release_trial
+# The root must be new and empty. Observe without cancelling or steering:
+& '.\.venv\Scripts\python.exe' scripts/validate_default_task.py watch '<project path>' --seconds 60
 # Use the project path printed above once its background jobs finish:
 & '.\.venv\Scripts\python.exe' scripts/validate_default_task.py audit '<project path>' --verify-jutrack
 ```
+
+The test freezes source/configuration and records exact model-authored programs. Do not edit code
+or steer the test project while it runs. Final qualification also requires a rendered-browser
+receipt from `tests/scientific_history_ui.cjs`, supplied with `audit --browser-receipt <receipt.json>`.
+Without that check the result is not a presentation pass. See the
+[reliability validation note](docs/reliability_upgrade_20260915.md) for scope and commands.
 
 The audit exits nonzero for incomplete work, missing chat artifacts, an isolated unit passed off
 as an MBA, or a failed independent JuTrack stability/radiation/achromaticity check. It never stops

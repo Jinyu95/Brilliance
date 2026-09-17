@@ -25,7 +25,12 @@ _EDGE_FIELDS = {
     "fint1", "fint2", "fint", "gap", "fullgap", "hgap",
     "fringebendentrance", "fringebendexit", "fringequadentrance", "fringequadexit",
     "polynoma", "polynomb", "t1", "t2", "xkick_rad", "ykick_rad",
+    "rad", "kickangle", "fringeintm0", "fringeintp0",
 }
+
+
+class UnsupportedOpticsSampling(LatticeInputError):
+    """Interior diagnostic is unavailable; intact native evaluation may still run."""
 
 
 def _physical_rows(elements: Sequence[Any]) -> list[dict[str, Any]]:
@@ -36,13 +41,13 @@ def _physical_rows(elements: Sequence[Any]) -> list[dict[str, Any]]:
     for row in rows:
         kind, name = row["kind"], row["name"]
         if kind not in _SUPPORTED:
-            raise ValueError(f"Dense optics sampling does not support {kind} element {name!r}")
+            raise UnsupportedOpticsSampling(f"Dense optics sampling does not support {kind} element {name!r}; use intact JuTrack optics/radiation without an unvalidated centre")
         if kind == "SBEND":
             if row["length_m"] <= 0.0:
                 raise ValueError(f"Dense optics sampling needs a positive-length SBEND: {name!r}")
             if any(float(row.get(field) or 0.0) != 0.0
                    for field in ("k1_m2", "k2_m3", "k3_m4")):
-                raise ValueError("Dense optics sampling currently supports pure SBENDs only")
+                raise UnsupportedOpticsSampling("Dense optics sampling currently supports pure SBENDs only")
         if kind == "MARKER" and row["length_m"] != 0.0:
             raise ValueError("A diagnostic MARKER must have zero length")
         # These fields would require explicit edge/transform treatment.  Never
@@ -51,11 +56,11 @@ def _physical_rows(elements: Sequence[Any]) -> list[dict[str, Any]]:
             lowered = key.casefold().replace("_", "")
             if lowered in {item.replace("_", "") for item in _EDGE_FIELDS}:
                 if value is not None and np.any(np.asarray(value, dtype=float) != 0.0):
-                    raise ValueError(f"Unsupported diagnostic edge/field {key!r} on {name!r}")
+                    raise UnsupportedOpticsSampling(f"Unsupported diagnostic edge/field {key!r} on {name!r}; intact optics and radiation remain available, but no centre is validated")
             if lowered in {"r1", "r2"} and value is not None:
                 matrix = np.asarray(value, dtype=float)
-                if matrix.shape != (6, 6) or not np.array_equal(matrix, np.eye(6)):
-                    raise ValueError(f"Unsupported diagnostic transform {key!r} on {name!r}")
+                if matrix.shape != (6, 6) or not (np.array_equal(matrix, np.eye(6)) or not np.any(matrix)):
+                    raise UnsupportedOpticsSampling(f"Unsupported diagnostic transform {key!r} on {name!r}")
     return rows
 
 
@@ -63,9 +68,10 @@ def _profile_row(point: Any, name: str, position: float, **metadata: Any) -> dic
     row = {"name": name, "s_m": float(position),
            "beta_x": float(point.betax), "beta_y": float(point.betay),
            "alpha_x": float(point.alphax), "alpha_y": float(point.alphay),
-           "Dx": float(point.dx), "Dpx": float(point.dpx), **metadata}
+           "Dx": float(point.dx), "Dpx": float(point.dpx),
+           "Dy": float(point.dy), "Dpy": float(point.dpy), **metadata}
     if not all(math.isfinite(row[key]) for key in
-               ("s_m", "beta_x", "beta_y", "alpha_x", "alpha_y", "Dx", "Dpx")):
+               ("s_m", "beta_x", "beta_y", "alpha_x", "alpha_y", "Dx", "Dpx", "Dy", "Dpy")):
         raise ValueError("JuTrack returned nonfinite dense optics")
     if row["beta_x"] <= 0.0 or row["beta_y"] <= 0.0:
         raise ValueError("JuTrack returned nonpositive dense beta functions")
@@ -98,8 +104,12 @@ class JuTrackProfileSampler:
         self.physical_editor = api.build_jutrack_editor(self._cell(self.rows, "physical"))
         self.jt = self.physical_editor.jt
         self._counts = self._split_counts(self.rows)
+        from .lattice_optimization import JuTrackLatticeEditor
         diagnostic = self._diagnostic_rows(self.rows)
-        self.diagnostic_editor = api.build_jutrack_editor(self._cell(diagnostic, "diagnostic"))
+        copies = [self.jt.deepcopy_element(element) for element in self.physical_editor.lattice]
+        for element, row in zip(copies, diagnostic):
+            element.name = row["name"]
+        self.diagnostic_editor = JuTrackLatticeEditor(self.jt, self.jt.Lattice(copies), diagnostic)
         self._physical_singletons = [self.jt.Lattice([element]) for element in self.physical_editor.lattice]
         self._diagnostic_singletons = [self.jt.Lattice([element]) for element in self.diagnostic_editor.lattice]
 
@@ -118,7 +128,7 @@ class JuTrackProfileSampler:
         for physical_index, row in enumerate(rows):
             piece = deepcopy(dict(row))
             piece["name"] = f"__prefix_{physical_index:06d}"
-            piece["fields"] = {"diagnostic_source_element": row["name"]}
+            piece["fields"]["diagnostic_source_element"] = row["name"]
             result.append(piece)
         return result
 
@@ -139,6 +149,9 @@ class JuTrackProfileSampler:
         locations in addition to the regular grid. Fractions lie strictly in
         (0,1); physical boundaries are already included. This measures bend
         centres or drift interiors without changing the physical topology.
+        Each explicitly requested fraction also needs native prefix/suffix
+        composition to reproduce the intact 6x6 map and eight-component exit.
+        A full-length clone alone is not a certificate of interior transport.
         """
         from .lattice_fingerprint import cell_fingerprint
 
@@ -180,6 +193,7 @@ class JuTrackProfileSampler:
                                                   rtol=self.map_rtol, atol=self.map_atol))
         sampling = {
             "engine": "JuTrack", "method": "physical_element_prefix_map_checked",
+            "validated": False,
             "map_equivalent": equivalent, "map_error": error,
             "map_rtol": self.map_rtol, "map_atol": self.map_atol,
             "max_step_m": self.max_step_m,
@@ -190,6 +204,8 @@ class JuTrackProfileSampler:
             "physical_element_count": len(rows), "diagnostic_element_count": len(diagnostic_rows),
             "prefix_sample_count": sum(map(len, fractions_by_element)), "exact_extrema_count": 0,
             "requested_sample_fractions": {name: sorted(values) for name,values in requested.items()},
+            "interior_composition_scope": "explicitly_requested_sample_fractions",
+            "interior_composition_checks": [],
             "element_map_error_max": 0.0, "element_exit_error_max": 0.0,
             "interpretation": "Independent JuTrack partial-element propagation; original finite-step element exits and periodic cell are authoritative.",
         }
@@ -213,7 +229,7 @@ class JuTrackProfileSampler:
         profile = [_profile_row(periodic, "START", 0.0)]
         position = 0.0
         entrance = periodic
-        twiss_fields = ("betax", "betay", "alphax", "alphay", "dx", "dpx")
+        twiss_fields = ("betax", "betay", "alphax", "alphay", "dx", "dpx", "dy", "dpy")
         for index, (row, original_exit, fractions) in enumerate(zip(rows, points, fractions_by_element)):
             length = float(row["length_m"])
             prefix = diagnostic[index]
@@ -253,6 +269,32 @@ class JuTrackProfileSampler:
                     sampling["map_equivalent"] = False
                     result["failure"] = f"The full prefix did not reproduce the physical optics exit of {row['name']}"
                     return result
+                for fraction in sorted(requested.get(row["name"], set())):
+                    # Independent diagnostic closure: keep both native partial
+                    # maps distinct from the intact original reference. Never
+                    # use this divided transport for optics/radiation ranking.
+                    interior = propagated(length * fraction)
+                    prefix_map = np.asarray(self.jt.findm66(prefix_lattice, dp=0.0, order=0, E0=self._energy_ev), dtype=float)
+                    prefix.len = float(length * (1.0 - fraction))
+                    if row["angle_rad"] is not None:
+                        prefix.angle = float(row["angle_rad"] * (1.0 - fraction))
+                    suffix_map = np.asarray(self.jt.findm66(prefix_lattice, dp=0.0, order=0, E0=self._energy_ev), dtype=float)
+                    if prefix_map.shape != (6, 6) or suffix_map.shape != (6, 6):
+                        raise TypeError("JuTrack interior composition needs two complete 6x6 maps")
+                    composed_map = suffix_map @ prefix_map
+                    composed_exit = self.jt.twissline(interior, prefix_lattice, dp=0.0, order=0, E0=self._energy_ev)
+                    transported = np.asarray([float(getattr(composed_exit, field)) for field in twiss_fields])
+                    valid = bool(np.allclose(original_element_map, composed_map, rtol=self.map_rtol, atol=self.map_atol)
+                                 and np.allclose(expected, transported, rtol=self.map_rtol, atol=self.map_atol))
+                    sampling["interior_composition_checks"].append({
+                        "source_element": row["name"], "sample_fraction": fraction, "passed": valid,
+                        "map_error": float(np.max(np.abs(composed_map - original_element_map))),
+                        "twiss_exit_error": float(np.max(np.abs(transported - expected))),
+                    })
+                    if not valid:
+                        sampling["map_equivalent"] = False
+                        result["failure"] = f"Native prefix/suffix composition did not reproduce intact {row['name']} at fraction {fraction}; interior diagnostic unvalidated"
+                        return result
                 for piece, fraction in enumerate(fractions, 1):
                     distance = length * fraction
                     at_exit = fraction == 1.0
@@ -273,6 +315,7 @@ class JuTrackProfileSampler:
                         point, row["name"] if at_exit else f"{row['name']}:sample{piece}",
                         position + distance, source_element=row["name"],
                         physical_element_exit=at_exit, sample_fraction=fraction,
+                        interior_composition_checked=fraction in requested.get(row["name"], set()),
                         requested_sample=fraction in requested.get(row["name"], set())))
                     previous, previous_distance = point, distance
             finally:
@@ -292,4 +335,5 @@ class JuTrackProfileSampler:
             beta_x_m=float(periodic.betax), beta_y_m=float(periodic.betay),
             maximum_beta_m=max(max(row["beta_x"], row["beta_y"]) for row in profile),
         )
+        sampling["validated"] = True
         return result
