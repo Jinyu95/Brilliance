@@ -58,7 +58,7 @@ Projects are saved under `research_projects/`. Back up this directory to preserv
 
 ## Demonstration
 
-[MBA design demonstration](examples/mba-design/README.md) presents selected results and an offline conversation with tables and figures from project-f82e15cdfbda87 (about 4.7 MiB). Open `examples/mba-design/index.html` in a browser; no server or model account is needed. This is a presentation of recorded design exploration, not a reproducibility package or a fully validated operational machine. Full research projects, source programs, private analysis and lattice exports are not bundled.
+[MBA design demonstration](examples/mba-design/index.html) is the original browser-saved page from project-f82e15cdfbda87, unchanged, with its referenced figures, styles and script. After downloading the repository, open `examples/mba-design/index.html` in a browser. Original application controls and artifact links are preserved; they may require the original local Brilliance server and project. Full research projects, private analysis and lattice exports are not bundled.
 
 ## Extend
 
