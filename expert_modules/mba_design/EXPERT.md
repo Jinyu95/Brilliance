@@ -5,7 +5,7 @@ summary: Concise MBA design knowledge and optional JuTrack-backed diagnostics; n
 domains: [mba, lattice design, electron storage rings, synchrotron light sources]
 authors: [Brilliance project team (draft maintainer)]
 tags: [mba, 5ba, 6ba, 7ba, 9ba, tme, modified-tme, hybrid-mba, emittance, chromatic, sextupole, matching, radiation, optimization, jutrack]
-version: 3.1.0
+version: 3.4.0
 status: draft
 knowledge_status: draft
 kind: method
@@ -14,16 +14,15 @@ enabled: true
 
 # MBA research knowledge
 
-Use physics to choose an experiment, then write project-local code using the
-configured JuTrack runtime and general numerical tools. This module supplies
-references and measurements, not a mandatory sequence, installed lattice or
-automatic design certificate. Other accelerator topics belong in other modules.
+Write physics-driven project-local code using configured JuTrack and general
+numerical tools. This module supplies references and measurements, not a fixed
+sequence, lattice or certificate. Other topics have separate modules.
 
 Read only what the current question needs:
 
 | Question | Reference |
 | --- | --- |
-| How should radiation, chromatic optics and nonlinear acceptance be designed together? | [Design decisions and measurements](references/hmba_outcome_api.md) |
+| How can very-low-emittance architectures, chromatic optics and nonlinear acceptance be designed together? | [Design decisions and measurements](references/hmba_outcome_api.md) |
 | How can I initialize and match a conventional MBA? | [Optional TME-derived recipe](references/conventional_api.md) |
 | What is the appropriate TME normalization? | [Analytical references](references/physics_reference_api.md) |
 
@@ -39,9 +38,11 @@ revise a route, geometry, solver or objective using measured evidence.
 
 Co-design radiation, sextupole sites and nonlinear acceptance; retain competing
 matched candidates. There is no preferred bend count: honor requested topology,
-otherwise compare alternatives. Papers supply hypotheses, not facility templates
-or tune targets. Consult the design decisions reference for trade-offs; the TME
-recipe is optional.
+otherwise compare alternatives. When users suggest multiple MBAs, explicitly
+evaluate that architecture before substituting a single many-bend cell. Describe
+constituent achromats, intermediate user straights and correction pairing.
+Read the design decisions reference; more bends alone do not create hierarchy.
+Papers supply hypotheses, not templates. The TME recipe is optional.
 
 Use exact current-project candidates for follow-ups and keep trial branches
 distinct from the working lattice. Save numerical results before optional

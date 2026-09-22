@@ -1,82 +1,90 @@
 # MBA design decisions: radiation, chromatic optics and acceptance
 
-These are hypotheses, not a required route. Compare JuTrack candidates under
-consistent requirements. Conventional, hybrid or higher-order-achromat layouts
-may win; more bends are not automatically better.
+Compare hypotheses with JuTrack, not a prescribed route or facility template.
+
+## Very-low-emittance architecture hypotheses
+
+For uncoupled natural horizontal emittance,
+`epsilon_x = Cq * gamma^2 * I5 / (Jx * I2)`,
+`I5 = integral(Hx * abs(h)^3 ds)`, `Jx = 1 - I4/I2`.
+Low Dx alone is not low H: Dpx and Twiss functions matter. Diagnose excitation
+by physical bend/region; isolated-unit TME is not complete-ring emittance.
+
+Explore many weak physical bends, balancing their smaller-angle emittance scale
+against space/focusing costs. Numerical slicing alone creates no benefit.
+Combined-function dipoles can alter focusing and damping partition; check I4,
+positive damping and aperture-dependent combined fields. Longitudinal-gradient
+bends redistribute curvature relative to H; distinguish physical modules from
+numerical segments. Weak reverse bends may be dedicated magnets or bending
+quadrupoles; include compensating positive bending and correct orbit/aperture
+modeling. These mechanisms can cooperate, but none guarantees improvement.
+[First-principles field/optics comparisons](https://arxiv.org/abs/1810.11286).
+
+Think hierarchically: two hybrid MBAs may form a superperiod; two superperiods
+may form a four-MBA repeating block. Explore one or two chromatic bumps across
+the selected block, not automatically two per MBA. Jointly redesign interfaces:
+concatenation alone neither removes bumps nor creates correction freedom.
+Introduce independent families/phases; approximate reflection symmetry belongs
+to the chosen block. This is optional, not a fixed layout or doubling sequence.
+
+Preserve each MBA's achromatic boundaries (Dx/Dpx zero within tolerances) to
+retain intermediate user straights. These can remain insertion-device sections
+inside larger superperiods: verify magnet-free length, matched betas and device
+requirements after rematching. Achromaticity alone is insufficient. Count MBAs,
+user straights and repeating blocks separately; preserve circumference/counts.
+
+Match radiation, chromatic and insertion optics together using grouped controls.
+Judge larger blocks by measured benefits, not complexity.
 
 ## Decide from measurements
 
 | Observation | Useful experiment |
 | --- | --- |
-| Low emittance but excessive sextupole demand | Vary sextupole-site dispersion and beta separation together with low-H bending optics; compare emittance, natural chromaticities and required integrated strengths. |
-| Corrected chromaticity but poor acceptance | Examine pair maps, tune footprints, amplitude detuning and both-sign off-momentum tracking; distinguish cancellation errors from inadequate nonlinear controls. |
-| Family strengths saturate or barely affect objectives | Measure response and its singular values; test family regrouping or site relocation before merely increasing search size. |
-| A changed bend profile lowers emittance | Re-match the complete cell/ring and compare radiation, damping and acceptance at consistent field, space and aperture assumptions. |
+| Low emittance, excessive sextupole demand | Co-vary site dispersion/betas and low-H bending optics; compare emittance, chromaticity and required integrated strengths. |
+| Corrected chromaticity, poor acceptance | Examine pair maps, tune footprints and detuning before adding nonlinear families. |
+| Saturated or ineffective controls | Measure response and singular values; test regrouping, relocation or geometry. |
+| Improved bend profile | Rematch the complete ring; compare I2/I4/I5, damping and acceptance under consistent constraints. |
 
-The SAPS study optimizes emittance, natural chromaticity and sextupole strength
-together, then tests nonlinear dynamics. None of these linear proxies guarantees
-large acceptance. Its damping-time trade-off also shows why emittance alone is
-insufficient. Learn these trade-offs, not its magnet settings or quoted aperture.
-[Zhao, Jiao & Wang, 2021](https://arxiv.org/abs/2105.14492).
+Retain alternatives. Failed searches do not prove impossibility.
+[Radiation/chromatic trade-offs](https://arxiv.org/abs/2105.14492).
 
-## Sites and cancellation
+## Sites, cancellation and nonlinear controls
 
-For the common two-outer-bump hypothesis, number bends by longitudinal order:
-B1–B2 and B(M−1)–BM are outer regions, B3–B(M−2) the core. In a 7BA this means
-B3–B5, regardless of inherited unit names. Both SF/SD slots on one side can be
-distinct finite intervals inside that outer region; adjacent drifts may form one
-installation span. Measure actual site Dx, Dpx and both betas, not just a peak in
-a bend. Keep core H/I5 separate from bump contrast.
+For a two-outer-bump 7BA hypothesis, B1–B2/B6–B7 are outer regions and B3–B5
+the core, counting physical main bends, not slices or inherited unit names.
+Both SF/SD sites can occupy distinct finite intervals in each outer region;
+adjacent drifts may form an installation span. Measure site Dx/Dpx/betas and
+core H/I5 separately. Other structures need their own optical-role regions.
 
-Nominal −I cancellation organizes a search; it is not a tracking result.
-Evaluate complete two-plane pair maps, endpoint optics, finite sextupole lengths
-and off-momentum departures. Cancellation can also cross a straight between
-cells, changing the phase constraints on the arc. Do not hard-code within-cell
-pairing as the only hybrid architecture.
-[Tan et al., 2023](https://arxiv.org/abs/2212.01870).
+Nominal −I is not a tracking result: evaluate complete two-plane pair maps,
+endpoint optics, finite sextupole lengths and off-momentum departures.
+Cancellation may cross a straight or cell boundary, releasing arc phase
+constraints. Do not prescribe within-cell pairing.
+[Cross-straight cancellation](https://arxiv.org/abs/2212.01870).
 
-## Phase and nonlinear controls
+Use actual ring periodicity and relevant resonance terms to explore phase
+neighborhoods, including symmetry breaking; do not copy facility tunes.
+[Distributed cancellation](https://proceedings.jacow.org/ipac2019/papers/moprb005.pdf).
+A measured chromatic-response QR/SVD nullspace exposes controls preserving
+chromaticities locally; re-correct after finite moves. Investigate harmonic
+families, positions or octupoles when measured detuning/resonances justify them.
 
-Choose phase neighborhoods using the actual ring periodicity and the resonance
-terms of interest; account for symmetry breaking, insertion sections and tune
-footprints. Do not copy a facility's fractional tunes. Higher-order-achromat
-schemes offer distributed cancellation, with different off-momentum trade-offs.
-Measure the two-plane chromatic response: a QR/SVD nullspace can expose remaining
-family combinations while holding chromaticities to target. Re-correct after
-finite moves. Test harmonic families, positions or octupoles when measured
-detuning/resonances justify them—not because more magnets must help.
-[SOLEIL HOA study, 2019](https://proceedings.jacow.org/ipac2019/papers/moprb005.pdf).
+## Joint search and trustworthy measurements
 
-## Joint search and field shaping
+Compare emittance, connected transverse acceptance and positive/negative momentum acceptance
+among chromatically corrected candidates. Screen cheaply, then refine turns,
+sampling and integration for finalists. For segmented fields, distinguish
+physical edges from internal interfaces; demonstrate convergence without
+spurious edge focusing. Report unsupported JuTrack field models explicitly.
 
-Keep several matched, chromatically corrected candidates. Compare emittance,
-connected transverse acceptance and positive/negative momentum acceptance rather
-than optimizing an isolated scalar proxy. Use inexpensive screens to allocate
-tracking effort, then increase turns, spatial sampling and integration accuracy
-for finalists. This is a suggested experimental strategy, not a compulsory solver.
-
-Reverse bends and longitudinal field redistribution are distinct hypotheses.
-Compare under consistent length, angle, field and aperture constraints; inspect
-I2/I4/I5 and damping after complete-ring rematching. First-principles comparisons
-explain why local field changes cannot be judged from peak field alone.
-[Riemann & Streun, 2019](https://arxiv.org/abs/1810.11286).
-If using explicit segments, distinguish physical edges from internal interfaces
-and demonstrate convergence without adding spurious edge focusing. If JuTrack
-cannot represent the intended field/edge model reliably, report that limitation.
-
-## Measurements and reporting
-
-`mba.mba_radiation_report` supplies scoped TME normalization and per-bend grouping.
+`mba.mba_radiation_report` provides scoped TME normalization and bend grouping.
 `mba.hybrid_mba_bend_roles` and `mba.evaluate_hybrid_mba_shape` are optional
 two-bump diagnostics for symmetric positive homogeneous sector-bend MBAs (M≥5),
-not universal hybrid validators. Use identical region/slot definitions in the
-objective and final report; distinguish global peaks from useful site values.
-Read signatures for thresholds. Unsupported scope is not a
-physical impossibility. `mba.solve_chromatic_correction` measures response.
+not universal validators. Use identical metric definitions in optimization and
+reporting; label global peaks separately from useful sites. Unsupported tool
+scope is not physical impossibility. `mba.solve_chromatic_correction` measures response.
 
-Report candidate identity, launch location/Twiss, coordinates, turns, RF,
-radiation, physical apertures and error assumptions. On-axis energy survival is
-not local momentum acceptance around the ring; disconnected surviving islands
-are not an injection aperture. Compare papers only with these scopes disclosed.
-Show one-cell lattice/optics, chromatic footprints and acceptance when measured.
-A failed search is not proof that a topology cannot work.
+Report candidate identity, launch optics/coordinates, turns, RF, radiation,
+apertures and errors. On-axis energy survival is not ring-local momentum
+acceptance; disconnected islands are not injection aperture. Compare papers
+only with these scopes disclosed. Show lattice/optics and measured acceptance.

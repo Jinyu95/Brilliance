@@ -670,9 +670,9 @@ def lattice_geometry_summary(
 def magnet_strength_limits(
     energy_gev: float,
     *,
-    dipole_field_t: float = 1.2,
-    quadrupole_pole_tip_field_t: float = 0.8,
-    sextupole_pole_tip_field_t: float = 0.6,
+    dipole_field_t: float = 2.1,
+    quadrupole_pole_tip_field_t: float = 1.2,
+    sextupole_pole_tip_field_t: float = 1.0,
     quadrupole_radius_m: float = 0.02,
     sextupole_radius_m: float = 0.02,
     octupole_pole_tip_field_t: float | None = None,
@@ -685,6 +685,12 @@ def magnet_strength_limits(
     These local strengths are independent of length. With length_m, also return
     max_abs_angle_rad=Bmax*L/Brho and max_abs_k1l_m1/k2l_m2/k3l_m3=Kn_max*L.
     JuTrack stores scalar k2/k3 as derivatives; PolynomB uses k2/2 and k3/6.
+    Default exploratory envelope: 2.1 T dipole, 1.2 T quadrupole and 1.0 T
+    sextupole pole-tip fields. These are design assumptions, not universal
+    demonstrated limits or a combined-function magnet feasibility certificate.
+    Reference radii remain 20 mm; specify smaller apertures explicitly rather
+    than silently borrowing small-bore prototype gradients. Explicit saved
+    project envelopes override these defaults and must remain reproducible.
     Octupole limits require BOTH explicit field and radius; no technology default
     is invented. Applicability of any field envelope depends on the declared magnet technology.
     """

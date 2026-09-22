@@ -452,6 +452,11 @@ Other expert tools may use the same outcome with `code` and `diagnostics`; do no
 exceptions and relabel them as this outcome.
 
 Engineering envelopes distinguish local and integrated strengths. Calling
+`api.magnet_strength_limits(energy)` defaults to 2.1 T dipole, 1.2 T quadrupole
+and 1.0 T sextupole pole-tip fields, with unchanged 20 mm reference radii.
+These are exploratory assumptions, not universal magnet ratings. Pass explicit
+apertures and fields for a chosen technology; preserve saved project envelopes.
+Calling
 `api.magnet_strength_limits(energy, length_m=L)` also returns `max_abs_angle_rad`,
 `max_abs_k1l_m1` and `max_abs_k2l_m2`. Local Kn limits depend on pole-tip field,
 aperture and rigidity, not length; integrated KnL limits scale with L. For K3,
