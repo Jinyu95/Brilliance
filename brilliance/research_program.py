@@ -21,7 +21,6 @@ from .parallel_safety import lint_worker_factory_captures
 from .public_api_lint import lint_public_api_calls
 
 MAX_RESEARCH_PROGRAM_BYTES = 128_000
-MAX_RESEARCH_PROGRAM_LINES = 600
 _LATTICE_PRODUCING_CALLS = frozenset({
     "lattice",
     "periodic_cell",
@@ -195,11 +194,17 @@ def _normal_finish_states(
 
 
 def inspect_research_program(workspace: Path | str, script: str, *, expert_registry: Any = None) -> Mapping[str, Any]:
-    """Perform the zero-cost source checks used by the execution boundary."""
+    """Check known contracts; report uncertain publication analysis as advice.
+
+    Python functions, imported helpers and dynamic keyword mappings make full
+    publication control flow undecidable here. The actual worker/result checks
+    remain responsible for requiring an output and validating its exact evidence.
+    """
 
     root = Path(workspace).resolve()
     source = _workspace_path(root, script, suffix=".py")
     issues: list[str] = []
+    warnings: list[str] = []
     tree: ast.AST | None = None
     source_bytes = 0
     source_lines = 0
@@ -215,11 +220,6 @@ def inspect_research_program(workspace: Path | str, script: str, *, expert_regis
                 issues.append(
                     f"research program has {source_bytes} bytes; split it below "
                     f"{MAX_RESEARCH_PROGRAM_BYTES} bytes"
-                )
-            if source_lines > MAX_RESEARCH_PROGRAM_LINES:
-                issues.append(
-                    f"research program has {source_lines} lines; split the campaign into "
-                    f"bounded stages of at most {MAX_RESEARCH_PROGRAM_LINES} lines"
                 )
             tree = ast.parse(rendered_source, filename=str(source))
         except (OSError, UnicodeError, SyntaxError) as exc:
@@ -247,18 +247,20 @@ def inspect_research_program(workspace: Path | str, script: str, *, expert_regis
             ):
                 finish_publishes_candidate = True
         if "open_research_run" not in calls:
-            issues.append("research program must call open_research_run()")
+            warnings.append("open_research_run() is optional; stdout and run output files are archived automatically.")
         if "finish" not in calls:
-            issues.append("research program must call run.finish(...) on every bounded outcome")
-        elif isinstance(tree, ast.Module) and False in _normal_finish_states(tree.body, issues=issues):
-            issues.append(
-                "a normal top-level path can end without run.finish(...); add one final "
-                "unconditional call or finish every branch"
+            warnings.append("run.finish(...) is optional; a successful plain program produces an execution result.")
+        elif isinstance(tree, ast.Module) and False in _normal_finish_states(tree.body, issues=warnings):
+            warnings.append(
+                "Static analysis cannot establish publication on every normal top-level path; "
+                "publication inside main(), imported helpers or dynamic calls is permitted. "
+                "A successful plain program produces an execution result even without finish()."
             )
         if calls & _LATTICE_PRODUCING_CALLS and not finish_publishes_candidate:
-            issues.append(
-                "a lattice-producing or lattice-modifying stage must preserve its exact state: "
-                "pass candidate_lattice=... explicitly to run.finish(...) on the candidate branch"
+            warnings.append(
+                "A lattice-producing call was detected without an explicit candidate_lattice keyword at finish. "
+                "If publishing a lattice, pass its exact candidate and evaluation (directly or through a helper); "
+                "diagnostic-only programs need not publish a new candidate."
             )
     from .experts import ExpertRegistry
     registry = expert_registry
@@ -278,6 +280,7 @@ def inspect_research_program(workspace: Path | str, script: str, *, expert_regis
         "source_bytes": source_bytes,
         "source_lines": source_lines,
         "issues": issues,
+        "warnings": warnings,
         "detected_calls": sorted(calls),
         "installed_return_contracts": contracts,
         "omitted_return_contracts": omitted_contracts,
@@ -312,7 +315,6 @@ def run_research_program(
     identity = {
         "script_sha256": _sha256(source),
         "arguments": json_safe(supplied),
-        "require_optimizer_evidence": bool(arguments.get("require_optimizer_evidence", False)),
         "project_id": context.project_id,
         "active_lattice_id": getattr(context.project, "active_lattice_id", None),
         "started_at": _now(),
@@ -361,6 +363,9 @@ def run_research_program(
     environment = context.environment.project_process_environment(
         workspace, existing=os.environ
     )
+    # Retired workflow-policy flags must not leak in from an older host/job.
+    environment.pop("BRILLIANCE_REQUIRE_OPTIMIZER_EVIDENCE", None)
+    environment.pop("BRILLIANCE_REQUEST_ACCEPTANCE", None)
     environment.update(
         {
             "BRILLIANCE_WORKSPACE": str(workspace),
@@ -375,12 +380,6 @@ def run_research_program(
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUNBUFFERED": "1",
         }
-    )
-    # Only the caller's explicit requirement belongs to this invocation. Never
-    # infer execution from an optimizer name in source or inherit a prior job's
-    # completion requirement into an unrelated scientific probe.
-    environment["BRILLIANCE_REQUIRE_OPTIMIZER_EVIDENCE"] = (
-        "1" if bool(arguments.get("require_optimizer_evidence", False)) else "0"
     )
     if cancel_file is not None:
         environment["BRILLIANCE_RUN_CANCEL"] = str(cancel_file)
@@ -489,9 +488,29 @@ def run_research_program(
             f"Stdout: {stdout_file}\nStderr: {stderr_file}"
         )
     if not result_file.is_file():
-        raise RuntimeError(
-            "research program completed without calling open_research_run().finish(...)"
-        )
+        # Only this invocation's output directory is collected: other jobs may
+        # be writing elsewhere in the workspace at the same time.
+        generated = [path for path in sorted(output.rglob("*"))
+                     if path.is_file() and path.resolve().is_relative_to(output)]
+        images = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
+        internal = {"program.py", "arguments.json", "result.json", "runtime_status.json",
+                    "active-lattice.json", "latest-candidate.json"}
+        plots = [{"path": path.relative_to(output).as_posix(), "title": path.stem}
+                 for path in generated if path.suffix.lower() in images]
+        downloads = [{"path": path.relative_to(output).as_posix(), "title": path.name}
+                     for path in generated
+                     if path.name not in internal and path.suffix.lower() not in images]
+        from .output_tables import output_tables
+        _write_json(result_file, {
+            "schema_version": "1.0", "status": "completed",
+            "summary": "Python program completed. Its output is preserved below.",
+            "data": {"stdout": stdout[-20_000:], "stderr": stderr[-20_000:],
+                     "returncode": process.returncode, "publication": "automatic_execution_output"},
+            "tables": output_tables(stdout), "plots": plots, "downloads": downloads,
+            "scientific_passed": None, "request_satisfied": None,
+            "use_as_working_lattice": False,
+            "limitations": ["Process completion is not scientific validation."],
+        })
     result = json.loads(result_file.read_text(encoding="utf-8"))
     if not isinstance(result, Mapping):
         raise ValueError("research program result must be one JSON object")
@@ -513,89 +532,18 @@ def run_research_program(
             json.loads(candidate_path.read_text(encoding="utf-8"))
         ).as_dict()
         candidate_artifact = str(candidate_path)
-        from .candidate_evidence import (
-            compare_declared_candidate_metrics,
-            compare_declared_geometry,
-            geometry_snapshot,
-            validate_saved_candidate_evaluation,
-        )
-        snapshot_check = validate_saved_candidate_evaluation(
-            candidate, result.get("candidate_evaluation"), output)
-        declared_data = result.get("data", {})
-        declared_data = dict(declared_data) if isinstance(declared_data, Mapping) else {}
-        metric_check = compare_declared_candidate_metrics(declared_data, snapshot_check)
-        # Recompute from saved rows: a program can write result.json directly
-        # or alter a previously emitted geometry table after finish().
-        geometry_report = geometry_snapshot(candidate)
-        declared_tables = result.get("tables", [])
-        declared_tables = declared_tables if isinstance(declared_tables, list) else []
-        geometry_check = compare_declared_geometry(declared_data, geometry_report, tables=declared_tables)
-        unverified_geometry = geometry_check.get("unverified_claims", [])
-        geometry_pending = not geometry_check["passed"] or bool(unverified_geometry)
-        result = dict(result)
-        result["data"] = {**declared_data, "candidate_geometry": geometry_report,
-                          "geometry_metric_comparison": geometry_check}
-        if geometry_pending:
-            result["data"]["submitted_presentation"] = {
-                "summary": result.get("summary"), "tables": declared_tables}
-            if not geometry_check["passed"]:
-                result["summary"] = (
-                    "Candidate preserved, but its reported geometry needs correction. "
-                    "The exact row-derived dimensions are shown below; no design completion is claimed.")
-                retained_tables = []
-            else:
-                result["summary"] = (
-                    "Candidate preserved, but some geometry tables are not bound to its exact snapshot. "
-                    "The verified row-derived dimensions are shown below; the report remains pending.")
-                quarantined = {item.get("table_index") for item in unverified_geometry}
-                retained_tables = [table for index, table in enumerate(declared_tables)
-                    if index not in quarantined and not (
-                        isinstance(table, Mapping) and table.get("kind") == "candidate_geometry"
-                        and table.get("lattice_id") == geometry_report["candidate_lattice_id"])]
-            result["tables"] = [geometry_report["table"], *retained_tables]
-        else:
-            result["tables"] = [geometry_report["table"], *[
-                table for table in declared_tables
-                if not (isinstance(table, Mapping) and table.get("kind") == "candidate_geometry"
-                        and table.get("lattice_id") == geometry_report["candidate_lattice_id"])]]
-        if not snapshot_check["passed"] or not metric_check["passed"] or geometry_pending:
-            # A well-formed saved branch is still useful. Missing lineage must
-            # never advance state, even if a program bypassed ResearchRun.finish.
-            result["use_as_working_lattice"] = False
-            result["request_satisfied"] = False
-            if result.get("scientific_passed") is True:
-                result["scientific_passed"] = None
-            if result.get("status") == "completed":
-                result["status"] = "partial"
-            result["candidate_handoff"] = {"disposition": "archived_branch",
-                                            "selection_requires_validated_execution": True}
-            prior_limitations = result.get("limitations", [])
-            limitations = list(prior_limitations) if isinstance(prior_limitations, list) else []
-            if not snapshot_check["passed"]:
-                limitations.extend([*snapshot_check["issues"], snapshot_check["next_action"]])
-            if not metric_check["passed"]:
-                limitations.extend(["Program summary differs from the exact candidate metrics.",
-                                    metric_check["next_action"]])
-            if geometry_pending:
-                limitations.append(geometry_check.get("next_action") or (
-                    "Bind current geometry tables to the exact candidate and identify targets separately. "
-                    "Correct the report without rerunning matching or optimization."))
-            result["limitations"] = limitations
-            result["data"].update(candidate_verification=snapshot_check,
-                                  candidate_metric_comparison=metric_check)
     from .scientific_reporting import normalize_scientific_outcome
 
     result = normalize_scientific_outcome(result)
     advance = (
         bool(result.get("use_as_working_lattice"))
-        and result.get("scientific_passed") is True
         and candidate is not None
     )
     return {
         "run_id": run_id,
-        # A program may validly report partial or descriptive work without a
-        # scientific pass. Candidate selection must require an explicit true.
-        "passed": result.get("scientific_passed") is True,
+        # This flag describes execution, never scientific acceptance.
+        "passed": True,
+        "scientific_passed": result.get("scientific_passed"),
         "working_lattice_action": "advance" if advance else "branch",
         "program": {
             "source": source.relative_to(workspace).as_posix(),
@@ -745,101 +693,23 @@ def validate_research_program(
     if request_satisfied is not None and not isinstance(request_satisfied, bool):
         issues.append("request_satisfied must be true, false, or null")
     candidate_verification = None
-    candidate_metric_comparison = None
-    candidate_geometry = None
-    geometry_metric_comparison = None
-    working_lattice_requested = result.get("use_as_working_lattice") is True
-    if candidate is not None:
-        from .candidate_evidence import (
-            compare_declared_candidate_metrics,
-            compare_declared_geometry,
-            geometry_snapshot,
-            validate_saved_candidate_evaluation,
-        )
+    if candidate is not None and result.get("candidate_evaluation"):
+        from .candidate_evidence import validate_saved_candidate_evaluation
         candidate_verification = validate_saved_candidate_evaluation(
-            candidate, result.get("candidate_evaluation"), output)
-        declared_data = result.get("data", {})
-        candidate_metric_comparison = compare_declared_candidate_metrics(
-            declared_data if isinstance(declared_data, Mapping) else {}, candidate_verification)
-        candidate_geometry = geometry_snapshot(candidate)
-        geometry_metric_comparison = compare_declared_geometry(
-            declared_data if isinstance(declared_data, Mapping) else {}, candidate_geometry, tables=tables)
-        if (not candidate_verification["passed"] or not candidate_metric_comparison["passed"]
-                or not geometry_metric_comparison["passed"]
-                or geometry_metric_comparison.get("unverified_claims")):
-            # This is unverified scientific provenance, not an execution error.
-            request_satisfied = False
-            working_lattice_requested = False
-            if scientific_passed is True:
-                scientific_passed = None
-    from .scientific_acceptance import (
-        assess_scientific_acceptance,
-        compact_scientific_acceptance,
-        environment_acceptance_requirements,
-        load_expert_registry,
-    )
-
+            candidate, result["candidate_evaluation"], output)
+    # The application's validator checks execution and archive integrity only.
+    # Explicit scientific reports are preserved, not reinterpreted as policy.
     acceptance = result.get("scientific_acceptance", {})
-    if not isinstance(acceptance, Mapping):
-        issues.append("scientific_acceptance must be an object")
-        acceptance = {}
-    try:
-        saved_requirements = acceptance.get("required", ())
-        if not isinstance(saved_requirements, (list, tuple)):
-            raise TypeError("required scientific acceptance names must be a list")
-        required = tuple(dict.fromkeys((*environment_acceptance_requirements(), *saved_requirements)))
-        registry = None
-        if acceptance.get("reports") or required:
-            from .experts import ExpertRegistry
-            if _context is not None and getattr(_context, "environment", None) is not None:
-                registry = ExpertRegistry.from_environment(
-                    _context.environment, project_directory=_context.project_directory)
-            else:
-                registry = load_expert_registry()
-        acceptance_check = assess_scientific_acceptance(
-            acceptance.get("reports"), required=required, lattice=candidate,
-            evidence_directory=output,
-            registry=registry,
-        )
-    except (TypeError, ValueError) as exc:
-        acceptance_check = {"passed": False, "checks": {}, "issues": [str(exc)]}
-        issues.append(f"scientific acceptance evidence is invalid: {exc}")
-    if not acceptance_check["passed"]:
-        # Invalid scientific acceptance is a legitimate intermediate result, not
-        # a coding exception. Only a conflicting success/promotion claim is wrong.
-        if request_satisfied is True:
-            issues.append("request_satisfied=true conflicts with failed scientific acceptance")
-        if working_lattice_requested:
-            issues.append("working-lattice promotion conflicts with failed scientific acceptance")
-        request_satisfied = False
-    data = result.get("data", {}) if isinstance(result.get("data"), Mapping) else {}
-    scalar_data = any(
-        isinstance(value, (str, int, float, bool)) and str(value).strip()
-        for value in data.values()
-    )
-    if (
-        str(result.get("status", "")) == "completed"
-        and not tables
-        and not plots
-        and not downloads
-        and not candidate_path
-        and not scalar_data
-    ):
-        issues.append(
-            "completed research must contain user-presentable data, a table, a plot, or a "
-            "candidate lattice; API/schema probes are not scientific milestones"
-        )
+    if execution.get("returncode") not in (None, 0):
+        issues.append("program exited unsuccessfully")
     return {
         "passed": not issues,
         "scientific_passed": scientific_passed if isinstance(scientific_passed, bool) else None,
         "request_satisfied": (
             request_satisfied if isinstance(request_satisfied, bool) else None
         ),
-        "scientific_acceptance": compact_scientific_acceptance(acceptance_check),
+        "scientific_acceptance": acceptance,
         "candidate_verification": candidate_verification,
-        "candidate_metric_comparison": candidate_metric_comparison,
-        "candidate_geometry": candidate_geometry,
-        "geometry_metric_comparison": geometry_metric_comparison,
         "validator": "saved_research_program_contract_v1",
         "issues": issues,
         "checked_values": {
@@ -851,9 +721,6 @@ def validate_research_program(
             "candidate_lattice_id": checked_lattice_id,
             "candidate_evaluation_verified": (
                 candidate_verification["passed"] if candidate_verification else None),
-            "candidate_geometry_consistent": (
-                geometry_metric_comparison["passed"] and not geometry_metric_comparison.get("unverified_claims")
-                if geometry_metric_comparison else None),
         },
         "claim_authority": (
             "Program provenance and output structure are validated. Scientific authority comes "

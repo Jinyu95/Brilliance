@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
-import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -70,25 +68,6 @@ def _names(value: Any, message: str) -> tuple[str, ...]:
     return names
 
 
-# Each process owns its evaluator.  This is essential for Julia/PythonCall:
-# live JuTrack objects must never be shared or pickled between worker processes.
-_PROCESS_EVALUATORS: dict[str, Evaluator] = {}
-
-
-def _process_evaluate(
-    session_id: str,
-    evaluator_factory: EvaluatorFactory,
-    position: Sequence[float],
-) -> dict[str, Any]:
-    evaluator = _PROCESS_EVALUATORS.get(session_id)
-    if evaluator is None:
-        evaluator = evaluator_factory()
-        if not callable(evaluator):
-            raise TypeError("evaluator_factory must return one callable evaluator")
-        _PROCESS_EVALUATORS[session_id] = evaluator
-    return dict(evaluator(np.asarray(position, dtype=float)))
-
-
 class ProcessBatchEvaluator:
     """Evaluate independent candidates in persistent, isolated processes.
 
@@ -102,23 +81,22 @@ class ProcessBatchEvaluator:
         self,
         evaluator_factory: EvaluatorFactory,
         *,
-        workers: int,
+        workers: int | None = None,
         verbose: int = 0,
     ) -> None:
-        count = _integer_option(workers, "workers", 1)
         if not callable(evaluator_factory):
             raise TypeError("evaluator_factory must be callable")
         from .parallel_safety import validate_worker_factory
 
         validate_worker_factory(evaluator_factory)
-        try:
-            from joblib import Parallel
-        except ImportError as exc:  # pragma: no cover - declared dependency
-            raise RuntimeError("process evaluation requires joblib") from exc
-        self._factory = evaluator_factory
-        self._workers = count
-        self._session_id = f"optimization-{os.getpid()}-{uuid.uuid4().hex}"
-        self._parallel = Parallel(n_jobs=count, backend="loky", verbose=int(verbose))
+        from .parallel_evaluation import ParallelEvaluator
+
+        def factory():
+            evaluate = evaluator_factory()
+            return lambda position: dict(evaluate(np.asarray(position, dtype=float)))
+
+        self._parallel = ParallelEvaluator(factory, workers=workers)
+        self._workers = self._parallel.workers
         self._closed = False
 
     @property
@@ -130,14 +108,8 @@ class ProcessBatchEvaluator:
             raise RuntimeError("process batch evaluator is closed")
         if not positions:
             return []
-        from joblib import delayed
-
         results = self._parallel(
-            delayed(_process_evaluate)(
-                self._session_id,
-                self._factory,
-                np.asarray(position, dtype=float).tolist(),
-            )
+            np.asarray(position, dtype=float).tolist()
             for position in positions
         )
         return [dict(item) for item in results]
@@ -146,10 +118,7 @@ class ProcessBatchEvaluator:
         if self._closed:
             return
         self._closed = True
-        backend = getattr(self._parallel, "_backend", None)
-        terminate = getattr(backend, "terminate", None)
-        if callable(terminate):
-            terminate()
+        self._parallel.close()
 
     def __enter__(self) -> "ProcessBatchEvaluator":
         return self
@@ -446,9 +415,9 @@ def particle_swarm_optimize(
     non-dominated-sort/crowding environmental selection chooses the next
     population.  Particle identities therefore do not force survival.
 
-    Omitted budgets default to max(500, 10 * dimensions) particles and 80
-    generations. Managed research applies configured production floors; explicit
-    smaller standalone calls remain supported. Resume retains the saved swarm.
+    Omitted budgets use configured defaults (64 particles / 40 generations when
+    unconfigured). Explicit budgets are honored, not increased automatically.
+    Neither a budget nor termination proves convergence. Resume retains the saved swarm.
     ``cache_evaluations=False`` skips all per-evaluation file caching, including
     any supplied cache directory, while retaining complete generation checkpoints.
     Interrupted partial generations may then need reevaluation on resume.

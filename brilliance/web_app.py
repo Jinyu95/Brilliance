@@ -1,8 +1,10 @@
 """FastAPI application for the chat-native BRILLIANCE interface."""
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -19,7 +21,12 @@ def create_web_app(project_root: Path | str | None = None) -> Any:
     """Create the web application lazily so scientific CLI use needs no web imports."""
     try:
         from fastapi import FastAPI, HTTPException, Request
-        from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+        from fastapi.responses import (
+            FileResponse,
+            HTMLResponse,
+            PlainTextResponse,
+            StreamingResponse,
+        )
         from fastapi.staticfiles import StaticFiles
     except ImportError as exc:  # pragma: no cover - exercised by launcher error path
         raise RuntimeError(
@@ -32,6 +39,9 @@ def create_web_app(project_root: Path | str | None = None) -> Any:
         or (_ROOT / "research_projects")
     ).resolve()
     service = ResearchChatService(root)
+    from .codex_account import CodexAccountService
+    from .model_settings import public_settings, read_settings, select_profile
+    accounts = CodexAccountService()
     async def supervise_jobs() -> None:
         while True:
             await asyncio.to_thread(service.recover_jobs)
@@ -43,14 +53,72 @@ def create_web_app(project_root: Path | str | None = None) -> Any:
         try:
             yield
         finally:
+            await accounts.close()
             task = app.state.job_supervisor
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
 
-    app = FastAPI(title="BRILLIANCE Research Workbench", version="2.0", lifespan=lifespan)
+    app = FastAPI(title="Brilliance Research Workbench", version="2.0", lifespan=lifespan)
     app.state.chat_service = service
     app.state.job_supervisor = None
+    app.state.codex_accounts = accounts
+
+    def settings_write_guard(request):
+        origin = request.headers.get("origin")
+        if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
+            raise HTTPException(status_code=403, detail="Account and model controls require a same-origin request")
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            raise HTTPException(status_code=403, detail="Cross-site account requests are not allowed")
+        if any(service.jobs.active(pid, action="codex_turn") for pid in service.store.list_project_ids()):
+            raise HTTPException(status_code=409, detail="Wait for or pause the active model turn before changing models/account. Numerical jobs need not be stopped.")
+
+    @app.get("/api/settings/models")
+    async def model_settings() -> MappingResponse:
+        return {**public_settings(), "backend": describe_codex_backend()}
+
+    @app.post("/api/settings/models")
+    async def set_model(request: Request) -> MappingResponse:
+        settings_write_guard(request)
+        body = await request.json()
+        profile = str(body.get("profile", ""))
+        model = body.get("model")
+        try:
+            data = read_settings()
+            if data.get("profiles", {}).get(profile, {}).get("provider") == "chatgpt":
+                status = await accounts.status()
+                if not status["account"]["authenticated"]:
+                    raise ValueError("Sign in with ChatGPT before selecting subscription mode")
+                chosen = model if model is not None else data["profiles"][profile].get("model", "")
+                if chosen and chosen not in {m["model"] for m in status["models"]}:
+                    raise ValueError("Choose a model reported by Codex model discovery")
+            settings_write_guard(request)
+            return select_profile(profile, model)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/account/codex")
+    async def codex_account() -> MappingResponse:
+        try:
+            return await accounts.status()
+        except Exception as exc:
+            return {"account": {"authenticated": False}, "models": [], "usage": None,
+                    "usage_status": "unavailable", "error": f"Codex account service unavailable ({type(exc).__name__}). Check the installed official Codex runtime."}
+
+    @app.post("/api/account/codex/{action}")
+    async def codex_account_action(action: str, request: Request) -> MappingResponse:
+        settings_write_guard(request)
+        try:
+            if action == "login":
+                body = await request.json()
+                return await accounts.start_login(body.get("method", "browser"))
+            if action == "cancel":
+                return await accounts.cancel_login()
+            if action == "logout":
+                return await accounts.logout()
+            raise ValueError("Unknown account action")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Codex {action} unavailable ({type(exc).__name__}). Check the official Codex runtime.") from exc
 
     def api_error(exc: Exception) -> HTTPException:
         if isinstance(exc, LookupError):
@@ -100,6 +168,13 @@ def create_web_app(project_root: Path | str | None = None) -> Any:
     async def project_snapshot(project_id: str) -> MappingResponse:
         try:
             return json_safe(await asyncio.to_thread(service.snapshot, project_id))
+        except Exception as exc:
+            raise api_error(exc) from exc
+
+    @app.post("/api/projects/{project_id}/checkpoints/{checkpoint_id}/branch", status_code=201)
+    async def branch_checkpoint(project_id: str, checkpoint_id: str) -> MappingResponse:
+        try:
+            return json_safe(await asyncio.to_thread(service.branch_checkpoint, project_id, checkpoint_id))
         except Exception as exc:
             raise api_error(exc) from exc
 
@@ -282,12 +357,24 @@ def create_web_app(project_root: Path | str | None = None) -> Any:
             },
         )
 
-    app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
+    class RevalidatedStaticFiles(StaticFiles):
+        async def get_response(self, path, scope):
+            response = await super().get_response(path, scope)
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            return response
+
+    app.mount("/static", RevalidatedStaticFiles(directory=str(_STATIC)), name="static")
 
     @app.get("/", include_in_schema=False)
     @app.get("/p/{project_id}", include_in_schema=False)
-    async def frontend(project_id: str | None = None) -> FileResponse:
-        return FileResponse(_STATIC / "index.html")
+    async def frontend(project_id: str | None = None) -> HTMLResponse:
+        html = (_STATIC / "index.html").read_text(encoding="utf-8")
+        # Bind HTML to the actual installed assets, including after local upgrades.
+        for name in ("styles.css", "workbench.css", "app.js"):
+            digest = hashlib.sha256((_STATIC / name).read_bytes()).hexdigest()[:16]
+            html = re.sub(rf'/static/{re.escape(name)}(?:\?[^"\s]*)?',
+                          f"/static/{name}?v={digest}", html)
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     return app
 

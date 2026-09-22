@@ -33,12 +33,22 @@
     })[char]);
   }
 
+  function activityTitle(activity) {
+    const title = escapeHtml(activity.title);
+    const url = String(activity.source_url || "");
+    return /^https?:\/\/[^\s]+$/i.test(url)
+      ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${title}</a>`
+      : title;
+  }
+
   function markdown(text) {
     const lines = escapeHtml(text).split(/\r?\n/);
     let html = "", list = false;
     const inline = (line) => line
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(/`([^`]+)`/g, "<code>$1</code>");
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
     const tableCells = (line) => {
       let value = line.trim();
       if (value.startsWith("|")) value = value.slice(1);
@@ -388,6 +398,22 @@
       return cached.node;
     });
     for (const id of state.messageNodes.keys()) if (!retained.has(id)) state.messageNodes.delete(id);
+    const sources = snapshot.session?.source_activities || [];
+    if (sources.length) {
+      const signature = JSON.stringify(sources);
+      let panel = state.sourcePanel;
+      if (!panel || panel.dataset.signature !== signature) {
+      const wasOpen = panel?.open;
+      panel = document.createElement("details");
+      panel.open = Boolean(wasOpen);
+      panel.dataset.signature = signature;
+      panel.className = "model-update";
+      panel.innerHTML = `<summary>Internet research — ${sources.length} recent source activities</summary>` +
+        sources.slice(-20).map(source => `<div><strong>${activityTitle(source)}</strong> — ${escapeHtml(source.status)}<p>${escapeHtml(source.summary || "")}</p><pre style="white-space:pre-wrap">${escapeHtml(source.detail || "")}</pre></div>`).join("");
+      state.sourcePanel = panel;
+      }
+      nodes.push(panel);
+    }
     if (snapshot.live) nodes.push(renderLive(snapshot.live));
     if (snapshot.session?.protocol_recovery && !snapshot.live) {
       nodes.push(renderProtocolRecovery(snapshot.session.protocol_recovery));
@@ -408,7 +434,11 @@
     const row = document.createElement("div");
     row.className = "live-message computation-message";
     const progress = calculation.progress || {};
-    const status = calculation.cancel_requested ? "Stopping at a safe boundary" : "Numerical campaign running";
+    const telemetry = calculation.telemetry || {};
+    const process = telemetry.process || {};
+    const status = calculation.cancel_requested ? "Stop requested" :
+      telemetry.status === "progress_stale" ? "Calculation active — numerical progress unknown" :
+      ["heartbeat_stale", "process_exited"].includes(telemetry.status) ? "Calculation needs attention" : "Numerical campaign running";
     const detail = progress.detail || calculation.detail || "Starting the configured JuTrack workers.";
     const generation = progress.model_independent_status?.generation;
     const generations = progress.generations;
@@ -420,18 +450,26 @@
       <div class="live-title"><strong>${escapeHtml(progress.stage || calculation.tool_id || "Managed calculation")}</strong></div>
       <div class="live-summary"><span>${elapsed} elapsed</span>${generation !== undefined ? `<span>generation ${escapeHtml(generation)}/${escapeHtml(generations || "?")}</span>` : ""}${evaluated !== undefined ? `<span>${escapeHtml(evaluated)}/${escapeHtml(population || "?")} particles</span>` : ""}<span>${escapeHtml(calculation.state.replaceAll("_", " "))}</span></div>
       <div class="model-update"><span>Current status</span><p>${escapeHtml(detail)}</p><p>This calculation is independent of the model turn and will keep running unless you stop it.</p></div>
-      <div class="computation-actions">${calculation.can_cancel ? `<button type="button" class="stop-computation">Stop after current evaluation</button>` : `<span>${calculation.cancel_requested ? "Cancellation requested; completed evidence will be retained." : ""}</span>`}</div>
+      <div class="model-update"><span>Observed activity — not a validated result</span>
+        <p>${escapeHtml(telemetry.message || "Detailed telemetry is unavailable from this server version.")}</p>
+        ${telemetry.program ? `<p>Program: <code>${escapeHtml(telemetry.program)}</code></p>` : ""}
+        <p>Runner heartbeat: ${telemetry.heartbeat_age_s != null ? `${elapsedLabel(telemetry.heartbeat_age_s)} ago` : "unknown"}; numerical report: ${telemetry.progress_age_s != null ? `${elapsedLabel(telemetry.progress_age_s)} ago` : "not received"}.</p>
+        <p>Process: ${escapeHtml(process.status || "unknown")}${process.pid ? ` (PID ${escapeHtml(process.pid)})` : ""}${process.cpu_seconds != null ? `; CPU time ${elapsedLabel(process.cpu_seconds)}; recent CPU ${process.cpu_percent != null ? `${escapeHtml(process.cpu_percent)}% (100% = one core)` : "sampling"}; memory ${escapeHtml(process.memory_mb)} MB; ${escapeHtml(process.process_count)} processes` : ""}.</p>
+        ${(telemetry.files || []).length ? `<ul>${telemetry.files.map(file => `<li>${escapeHtml(file.name)} — ${escapeHtml(file.bytes)} bytes, changed ${elapsedLabel(file.age_s)} ago (unvalidated file)</li>`).join("")}</ul>` : "<p>No nonempty numerical output files observed yet.</p>"}
+      </div>
+      <div class="computation-actions">${calculation.can_cancel ? `<button type="button" class="stop-computation">Stop calculation…</button>` : `<span>${calculation.cancel_requested ? "Cancellation requested; saved evidence will be retained." : ""}</span>`}</div>
     </div>`;
     const stop = row.querySelector(".stop-computation");
     if (stop) stop.addEventListener("click", async () => {
+      if (!confirm("Stop this calculation? Saved artifacts remain, but the current evaluation may be interrupted.")) return;
       stop.disabled = true;
       stop.textContent = "Requesting stop…";
       try {
         await api(`/api/projects/${encodeURIComponent(state.projectId)}/computations/${encodeURIComponent(calculation.id)}/cancel`, { method: "POST", body: "{}" });
-        showToast("The numerical campaign will stop at the next safe evaluation boundary.");
+        showToast("Stop requested. Saved artifacts are preserved; the current evaluation may be interrupted.");
       } catch (error) {
         stop.disabled = false;
-        stop.textContent = "Stop after current evaluation";
+        stop.textContent = "Stop calculation…";
         showToast(error.message);
       }
     });
@@ -482,24 +520,105 @@
     dialog = document.createElement("dialog");
     dialog.id = "model-configuration";
     dialog.className = "model-configuration";
-    const backend = state.snapshot?.project?.backend || {};
-    dialog.innerHTML = `<h2>Configure a different model</h2>
-      <p>Current model: <strong>${escapeHtml(modelLabel(backend))}</strong>.</p>
-      <p>Models are configured in the application's local <code>.env</code> file. This dialog does not switch the running model.</p>
-      <ol><li>Set <code>BRILLIANCE_CODEX_MODEL</code> to a model supported by your provider.</li>
-      <li>If changing providers, also configure <code>BRILLIANCE_CODEX_PROVIDER</code>, <code>BRILLIANCE_CODEX_BASE_URL</code>,
-      <code>BRILLIANCE_CODEX_WIRE_API</code> and <code>BRILLIANCE_CODEX_API_KEY_ENV</code> as documented in the README.
-      Keep credentials in the local environment, never in chat.</li>
-      <li>Restart Brilliance, reopen this project, then choose <strong>Retry from checkpoint</strong>. Saved evidence stays in the project.</li></ol>
-      <p>No configuration, research-network setting, or running calculation is changed by opening this dialog.</p>
+    dialog.innerHTML = `<h2>Models &amp; account</h2>
+      <p>ChatGPT subscription uses official Codex sign-in. IHEP and OpenAI API billing remain separate.</p>
+      <label>Backend <select id="backend-profile"></select></label>
+      <label>Model <input id="api-model" autocomplete="off"><select id="subscription-model" hidden></select></label>
+      <button id="apply-model" type="button">Use for next turn</button>
+      <p id="model-settings-status" role="status">Loading configuration…</p>
+      <hr><h3>Codex-managed ChatGPT account</h3>
+      <p>Sign-in uses the local Codex account, shared with Codex CLI. Signing out affects that account too.</p>
+      <div id="codex-account-status">Checking account…</div><div id="codex-login-link"></div>
+      <button id="codex-login" type="button">Sign in with ChatGPT</button>
+      <button id="codex-device" type="button">Use device code</button>
+      <button id="codex-cancel" type="button">Cancel sign-in</button>
+      <button id="codex-logout" type="button">Sign out</button>
+      <button id="codex-refresh" type="button">Refresh status</button>
+      <p>Models and quota come from Codex; availability depends on your account. No cookies or tokens are copied into Brilliance.</p>
       <form method="dialog"><button type="submit">Close</button></form>`;
     document.body.appendChild(dialog);
     dialog.showModal();
+    let settings = null, account = null, timer = null;
+    const within = (id) => dialog.querySelector(id);
+    const message = (value) => { within("#model-settings-status").textContent = value; };
+    const chooseProfile = () => {
+      const profile = settings?.profiles.find(p => p.id === within("#backend-profile").value);
+      const subscription = profile?.provider === "chatgpt";
+      within("#api-model").hidden = subscription;
+      within("#subscription-model").hidden = !subscription;
+      within("#api-model").value = profile?.model || "";
+      within("#subscription-model").value = profile?.model || "";
+    };
+    const displayLogin = (login) => {
+      const target = within("#codex-login-link");
+      target.replaceChildren();
+      if (login?.status === "pending" && /^https:\/\//i.test(login.url || "")) {
+        const link = document.createElement("a");
+        link.href = login.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+        link.textContent = "Open official Codex sign-in";
+        target.append(link);
+        if (login.user_code) { const code = document.createElement("p"); code.textContent = `Device code: ${login.user_code}`; target.append(code); }
+      } else if (login?.message) target.textContent = login.message;
+    };
+    const refresh = async () => {
+      clearTimeout(timer);
+      account = await api("/api/account/codex");
+      if (!dialog.open) return;
+      const info = account.account || {};
+      const windows = account.usage?.rateLimitsByLimitId || (account.usage?.rateLimits ? {codex: account.usage.rateLimits} : {});
+      const quota = Object.entries(windows).flatMap(([name, bucket]) => ["primary", "secondary"].filter(k => bucket?.[k]).map(k => {
+        const w = bucket[k];
+        return `${name} ${w.windowDurationMins ?? "?"}-minute window: ${w.usedPercent ?? "unknown"}% used; reset ${w.resetsAt ? new Date(w.resetsAt * 1000).toLocaleString() : "unknown"}`;
+      }));
+      within("#codex-account-status").textContent = [
+        info.authenticated ? `Signed in: ${info.email || "ChatGPT account"} (${info.plan || "plan unavailable"})` : "Not signed in with ChatGPT",
+        account.runtime_versions ? `Codex runtime ${account.runtime_versions.runtime}; SDK ${account.runtime_versions.sdk}` : "",
+        account.error || "", ...quota, ...(account.warnings || []),
+        !quota.length ? "Quota unavailable; this does not mean unlimited usage." : "",
+      ].filter(Boolean).join(" · ");
+      within("#subscription-model").innerHTML = `<option value="">Codex-reported default</option>` + (account.models || []).map(m =>
+        `<option value="${escapeHtml(m.model)}">${escapeHtml(m.displayName || m.model)}</option>`).join("");
+      chooseProfile(); displayLogin(account.login);
+      if (account.login?.status === "pending") timer = setTimeout(() => refresh().catch(e => message(e.message)), 3000);
+    };
+    within("#backend-profile").onchange = chooseProfile;
+    within("#apply-model").onclick = async () => {
+      try {
+        const profile = settings.profiles.find(p => p.id === within("#backend-profile").value);
+        settings = await api("/api/settings/models", {method: "POST", body: JSON.stringify({
+          profile: profile.id, model: within(profile.provider === "chatgpt" ? "#subscription-model" : "#api-model").value})});
+        message("Saved. The next model turn uses this selection. Numerical jobs and project evidence are unchanged.");
+      } catch (e) { message(e.message); }
+    };
+    const login = async (method) => {
+      try { displayLogin(await api("/api/account/codex/login", {method: "POST", body: JSON.stringify({method})}));
+        timer = setTimeout(() => refresh().catch(e => message(e.message)), 3000);
+      } catch (e) { message(e.message); }
+    };
+    within("#codex-login").onclick = () => login("browser");
+    within("#codex-device").onclick = () => login("device");
+    within("#codex-refresh").onclick = () => refresh().catch(e => message(e.message));
+    for (const action of ["cancel", "logout"]) within(`#codex-${action}`).onclick = async () => {
+      if (action === "logout" && !confirm("Sign out of the shared Codex ChatGPT account?")) return;
+      try { await api(`/api/account/codex/${action}`, {method: "POST"}); await refresh(); }
+      catch (e) { message(e.message); }
+    };
+    dialog.addEventListener("close", () => clearTimeout(timer));
+    api("/api/settings/models").then(data => {
+      settings = data;
+      within("#backend-profile").innerHTML = data.profiles.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("");
+      within("#backend-profile").value = data.selected;
+      chooseProfile(); message(`Configuration: ${data.source}. Credentials stay in .env.`);
+      return refresh();
+    }).catch(e => message(e.message));
   }
+
+  $("#model-settings")?.addEventListener("click", showModelConfiguration);
 
   function renderMessage(message) {
     const article = document.createElement("article");
     article.className = `message ${message.role}`;
+    if (message.meta?.presentation_role === "technical_details") article.classList.add("technical-message");
     if (state.newMessageIds.has(message.id)) article.classList.add("message-new");
     article.dataset.messageId = message.id;
     if (message.role === "assistant") {
@@ -516,7 +635,7 @@
     const content = document.createElement("div");
     content.className = "message-content";
     content.innerHTML = markdown(message.content);
-    body.appendChild(content);
+    if (message.content) body.appendChild(content);
     if (message.attachments?.length) {
       const attachments = document.createElement("div");
       attachments.className = "message-attachments";
@@ -529,6 +648,22 @@
     time.className = "message-time";
     time.textContent = timeLabel(message.timestamp);
     body.appendChild(time);
+    if (message.meta?.conversation_checkpoint) {
+      const restore = document.createElement("button");
+      restore.className = "checkpoint-branch";
+      restore.textContent = "Branch from here";
+      restore.title = "Restore saved files and conversation into a new project; the original and its jobs remain unchanged.";
+      restore.addEventListener("click", async () => {
+        if (!window.confirm("Create a new project from the saved state at this message? The original project and its running jobs will remain unchanged. No calculation will restart automatically.")) return;
+        restore.disabled = true;
+        try {
+          const result = await api(`/api/projects/${encodeURIComponent(state.projectId)}/checkpoints/${encodeURIComponent(message.meta.conversation_checkpoint)}/branch`, { method: "POST" });
+          await openProject(result.project.id);
+        } catch (error) { showToast(error.message); }
+        finally { restore.disabled = false; }
+      });
+      body.appendChild(restore);
+    }
     article.appendChild(body);
     return article;
   }
@@ -544,6 +679,7 @@
     const updates = (progress.updates || []).slice(-1);
     const findings = (progress.latest_results || []).slice(-3);
     const errors = (progress.latest_errors || []).slice(-2);
+    const sourceNotices = (progress.source_notices || []).slice(-2);
     const narrative = live.partial_response || progress.narrative || "";
     const pending = Number(live.pending_count || 0);
     const backend = live.backend || {};
@@ -569,15 +705,50 @@
       ${errors.length ? `<div class="finding-list error-list"><div class="live-section-title">What needs repair</div>${errors.map((error) =>
         `<div class="finding-row"><span class="activity-status failed"></span><div><strong>${escapeHtml(error.title)}</strong><p>${escapeHtml(error.summary)}</p></div></div>`
       ).join("")}</div>` : ""}
+      ${sourceNotices.length ? `<div class="finding-list"><div class="live-section-title">Source unavailable — research can continue</div>${sourceNotices.map((notice) =>
+        `<div class="finding-row"><div><strong>${escapeHtml(notice.title)}</strong><p>${escapeHtml(notice.summary)}</p></div></div>`
+      ).join("")}</div>` : ""}
       ${activities.length ? `<div class="activity-list">${activities.map((activity) =>
-        `<div class="activity-row"><span class="activity-status ${escapeHtml(activity.status || "running")}"></span><div><span>${escapeHtml(activity.title)}</span>${activity.summary ? `<p>${escapeHtml(activity.summary)}</p>` : ""}</div><small>${escapeHtml((activity.status || "running").replaceAll("_", " "))}</small></div>`
+        `<div class="activity-row"><span class="activity-status ${escapeHtml(activity.status || "running")}"></span><div><span>${activityTitle(activity)}</span>${activity.summary ? `<p>${escapeHtml(activity.summary)}</p>` : ""}</div><small>${escapeHtml((activity.status || "running").replaceAll("_", " "))}</small></div>`
       ).join("")}</div>` : ""}
       ${pending ? `<div class="pending-note">${pending} follow-up message${pending === 1 ? "" : "s"} queued</div>` : ""}
     </div>`;
+    row.querySelectorAll(".error-list, .activity-list, .finding-list").forEach((section) => {
+      const sourceNotice = section.querySelector(".live-section-title")?.textContent.startsWith("Source unavailable");
+      if (!sourceNotice && !section.matches(".error-list, .activity-list")) return;
+      const details = document.createElement("details");
+      details.className = "technical-details";
+      const summary = document.createElement("summary");
+      summary.textContent = sourceNotice ? "Source-access notices" : section.matches(".error-list") ? "Execution diagnostics" : "Tool activity";
+      const key = sourceNotice ? "sources" : section.matches(".error-list") ? "errors" : "tools";
+      details.dataset.diagnostic = key;
+      details.open = document.querySelector(`.live-message details[data-diagnostic="${key}"]`)?.open || false;
+      section.replaceWith(details);
+      details.append(summary, section);
+    });
     return row;
   }
 
   function renderAttachment(attachment) {
+    if (attachment.type === "technical_details") {
+      const details = document.createElement("details");
+      details.className = "technical-details";
+      const rows = attachment.rows || [];
+      const heading = document.createElement("summary");
+      heading.textContent = `${attachment.title || "Technical details"} (${rows.length})`;
+      details.appendChild(heading);
+      rows.forEach((row) => {
+        const entry = document.createElement("div");
+        entry.dataset.messageId = row.id || "";
+        const time = document.createElement("small");
+        time.textContent = timeLabel(row.timestamp);
+        const text = document.createElement("pre");
+        text.textContent = row.text || "";
+        entry.append(time, text);
+        details.appendChild(entry);
+      });
+      return details;
+    }
     if (attachment.type === "tool") return renderTool(attachment);
     if (attachment.type === "metrics") return renderMetrics(attachment);
     if (attachment.type === "evidence_summary") return renderEvidenceSummary(attachment);
@@ -619,7 +790,7 @@
       const rows = attachment.rows || [];
       details.innerHTML = `<summary><span class="tool-dot"></span><strong>${escapeHtml(attachment.title || "Research activity")}</strong><span>${rows.length} steps</span></summary>
         <div class="tool-body"><div class="activity-list">${rows.map((activity) =>
-          `<div class="activity-row"><span class="activity-status ${escapeHtml(activity.status || "completed")}"></span><div><span>${escapeHtml(activity.title)}</span>${activity.summary ? `<p>${escapeHtml(activity.summary)}</p>` : ""}</div><small>${escapeHtml((activity.status || "completed").replaceAll("_", " "))}</small></div>`
+          `<div class="activity-row"><span class="activity-status ${escapeHtml(activity.status || "completed")}"></span><div><span>${activityTitle(activity)}</span>${activity.summary ? `<p>${escapeHtml(activity.summary)}</p>` : ""}</div><small>${escapeHtml((activity.status || "completed").replaceAll("_", " "))}</small></div>`
         ).join("")}</div></div>`;
       return details;
     }
@@ -736,12 +907,21 @@
       summary.textContent = attachment.summary;
       card.appendChild(summary);
     }
+    if (attachment.program_stdout) {
+      const output = document.createElement("details");
+      const label = document.createElement("summary");
+      label.textContent = "Program output";
+      const text = document.createElement("pre");
+      text.textContent = attachment.program_stdout;
+      output.append(label, text);
+      card.appendChild(output);
+    }
     if (attachment.scientific_passed !== null && attachment.scientific_passed !== undefined) {
       const gate = document.createElement("p");
       gate.className = "evidence-summary-text";
       gate.textContent = attachment.scientific_passed
-        ? "Calculation checks passed. This does not by itself mean the requested design target was met."
-        : "The calculation did not pass its declared scientific checks; do not treat it as an accepted result.";
+        ? "The research program reports that its checks passed. Brilliance does not independently certify the design."
+        : "The research program reports failed checks; see the measurements and explanation.";
       card.appendChild(gate);
     }
     if (attachment.steps?.length) {
@@ -1580,7 +1760,7 @@
     const activitySignature = JSON.stringify(session.activities || []);
     if (log.dataset.signature !== activitySignature) {
       log.dataset.signature = activitySignature;
-      log.innerHTML = (session.activities || []).map((item) => `<details ${item.status === "failed" ? "open" : ""}><summary>${escapeHtml(item.title)} — ${escapeHtml(item.status)}</summary><pre>${escapeHtml(item.detail || "Completed without a reported error.")}</pre></details>`).join("") || "No tool activity yet.";
+      log.innerHTML = (session.activities || []).map((item) => `<details ${item.status === "failed" ? "open" : ""}><summary>${activityTitle(item)} — ${escapeHtml(item.status)}</summary><pre>${escapeHtml(item.detail || "Completed without a reported error.")}</pre></details>`).join("") || "No tool activity yet.";
     }
   }
 

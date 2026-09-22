@@ -566,20 +566,9 @@ def _submit_expert_job(
     supplied_arguments: Mapping[str, Any] | None = None,
     argument_resolution: Mapping[str, str] | None = None,
 ) -> Any:
-    from .presentation import ResearchConversationStore
     from .research_recovery import scientist_request
-    from .scientific_acceptance import (
-        ACCEPTANCE_ENVIRONMENT,
-        continued_request_acceptance,
-        environment_acceptance_requirements,
-        load_expert_registry,
-    )
 
     origin = scientist_request(root, project.id)
-    required = (environment_acceptance_requirements() if ACCEPTANCE_ENVIRONMENT in os.environ else
-                continued_request_acceptance(str(origin.get("content", "")),
-                    ResearchConversationStore(root).messages(project.id),
-                    registry=load_expert_registry(project_directory=root / project.id)))
     jobs = ResearchJobStore(root)
     job = jobs.submit(
         project.id,
@@ -591,7 +580,6 @@ def _submit_expert_job(
             "supplied_arguments": json_safe(supplied_arguments or {}),
             "argument_resolution": json_safe(argument_resolution or {}),
             "scientist_request": origin,
-            "scientific_acceptance_requirements": list(required),
         },
     )
     if job.state is JobState.QUEUED:
@@ -904,8 +892,7 @@ def _record_working_lattice(
         and result.get("passed") is True
     ):
         return
-    # A passing output contract is not enough; the program must explicitly
-    # authorize this scientifically passing candidate as the working lattice.
+    # Selection must be explicit; it does not certify a scientific design.
     if str(result.get("working_lattice_action", "branch")).strip().lower() != "advance":
         return
     artifacts = result.get("artifacts", {})
@@ -1193,7 +1180,7 @@ def _compact_expert_execution(execution: Mapping[str, Any]) -> dict[str, Any]:
     arguments = execution.get("arguments", {})
     supplied = execution.get("supplied_arguments", {})
     scientific_passed = validation.get("scientific_passed")
-    if not isinstance(scientific_passed, bool):
+    if "scientific_passed" not in validation:
         result = execution.get("result", {})
         scientific_passed = (
             result.get("passed")

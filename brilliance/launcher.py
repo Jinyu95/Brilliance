@@ -40,6 +40,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8501)
     parser.add_argument("--project-root", default=None)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--show-config", action="store_true",
+                        help="show resolved runtime settings and sources without starting JuTrack")
     parser.add_argument(
         "--check",
         action="store_true",
@@ -60,6 +62,8 @@ def _activate_configured_runtime() -> ResearchEnvironment:
     """Enter the configured runtime before application modules are imported."""
 
     _load_project_dotenv()
+    from .model_settings import apply_model_settings
+    apply_model_settings()
     environment = ResearchEnvironment.load()
     if not environment.is_active_python():
         # Replace a global/Conda console-script process with the configured
@@ -81,8 +85,25 @@ def _activate_configured_runtime() -> ResearchEnvironment:
 
 
 def main() -> int:
-    environment = _activate_configured_runtime()
     args = _parser().parse_args()
+    if args.show_config:
+        dotenv_path = _load_project_dotenv()
+        environment = ResearchEnvironment.load()
+        report = environment.manifest()
+        from .model_settings import public_settings
+        report["models"] = public_settings()
+        report["configuration_sources"] = {
+            "runtime": str(environment.config_path), "provider_env_file": str(dotenv_path),
+            "precedence": "TOML owns runtime policies; process environment precedes .env for provider settings",
+        }
+        report["ignored_legacy_settings"] = [name for name in (
+            "BRILLIANCE_AUTO_REPAIR_ATTEMPTS", "BRILLIANCE_CODEX_INCREMENT_TIMEOUT",
+            "BRILLIANCE_CODEX_TURN_TIMEOUT", "BRILLIANCE_RESEARCH_AUTO_CONTINUE",
+            "BRILLIANCE_RESEARCH_MAX_INCREMENTS", "BRILLIANCE_MAX_CONSECUTIVE_TIMEOUTS",
+        ) if name in os.environ]
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+    environment = _activate_configured_runtime()
     from .runtime_health import ensure_runtime_ready
 
     try:

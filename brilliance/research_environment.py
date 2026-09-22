@@ -71,6 +71,9 @@ class ResearchEnvironment:
     compute_backend: str
     local_worker_processes: int
     threads_per_worker: int
+    repair_max_attempts: int = 12
+    repair_max_same_error: int = 3
+    max_consecutive_timeouts: int = 2
 
     @classmethod
     def load(
@@ -160,7 +163,7 @@ class ResearchEnvironment:
             ),
             candidate_wall_time_s=int(execution.get("candidate_wall_time_s", 600)),
             codex_sandbox=str(execution.get("codex_sandbox", "workspace-write")).strip().lower(),
-            internet_access=bool(execution.get("internet_access", False)),
+            internet_access=bool(execution.get("internet_access", True)),
             local_mcp_enabled=bool(mcp.get("local_stdio_enabled", True)),
             remote_mcp_enabled=bool(mcp.get("remote_http_enabled", False)),
             expert_paths=tuple(
@@ -168,7 +171,7 @@ class ResearchEnvironment:
             ),
             expert_strict=bool(experts.get("strict", True)),
             project_expert_modules_enabled=bool(experts.get("project_modules_enabled", True)),
-            expert_max_context_chars=int(experts.get("max_context_chars", 80_000)),
+            expert_max_context_chars=int(experts.get("max_context_chars", 12_000)),
             auto_continue=bool(interaction.get("auto_continue", False)),
             max_autonomous_increments=int(interaction.get("max_autonomous_increments", 1)),
             turn_wall_time_s=int(interaction.get("turn_wall_time_s", 1800)),
@@ -178,6 +181,9 @@ class ResearchEnvironment:
             compute_backend=str(compute.get("backend", "local_process")).strip().lower(),
             local_worker_processes=int(compute.get("local_worker_processes", 1)),
             threads_per_worker=int(compute.get("threads_per_worker", 1)),
+            repair_max_attempts=int(_table(payload, "recovery").get("max_attempts_per_request", 12)),
+            repair_max_same_error=int(_table(payload, "recovery").get("max_attempts_per_error", 3)),
+            max_consecutive_timeouts=int(interaction.get("max_consecutive_timeouts", 2)),
         )
         environment.validate()
         return environment
@@ -258,6 +264,10 @@ class ResearchEnvironment:
             missing.append("interaction.max_autonomous_increments must be in [1, 20]")
         if self.turn_wall_time_s < 30:
             missing.append("interaction.turn_wall_time_s must be at least 30 seconds")
+        if self.repair_max_attempts < 0 or self.repair_max_same_error < 1:
+            missing.append("recovery requires max_attempts_per_request >= 0 and max_attempts_per_error >= 1")
+        if self.max_consecutive_timeouts < 1:
+            missing.append("interaction.max_consecutive_timeouts must be positive")
         if self.candidate_wall_time_s < 1:
             missing.append("execution.candidate_wall_time_s must be positive")
         elif self.candidate_wall_time_s > self.turn_wall_time_s:
@@ -537,10 +547,18 @@ class ResearchEnvironment:
                 "max_context_chars": self.expert_max_context_chars,
             },
             "interaction": {
+                "source": str(self.config_path),
                 "auto_continue": self.auto_continue,
                 "max_autonomous_increments": self.max_autonomous_increments,
                 "turn_wall_time_s": self.turn_wall_time_s,
                 "require_scientist_checkpoint": self.require_scientist_checkpoint,
+                "max_consecutive_timeouts": self.max_consecutive_timeouts,
+            },
+            "recovery": {
+                "source": str(self.config_path),
+                "max_attempts_per_request": self.repair_max_attempts,
+                "max_attempts_per_error": self.repair_max_same_error,
+                "unchanged_failure": "stop",
             },
             "compute": {
                 "backend": self.compute_backend,

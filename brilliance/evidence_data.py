@@ -402,44 +402,6 @@ class EvidenceCatalog:
         self._datasets[dataset_id] = _Dataset(descriptor, normalized)
 
 
-def compact_catalog(project: Any, project_root: Path | str) -> list[dict[str, Any]]:
-    """Return descriptors small enough for an action-selection prompt."""
-    descriptors = EvidenceCatalog(project, project_root).descriptors()
-    descriptors.sort(
-        key=lambda item: (
-            not str(item.get("id", "")).startswith("lattice."),
-            not bool(item.get("accepted")),
-            str(item.get("id", "")),
-        )
-    )
-    compact: list[dict[str, Any]] = []
-    rendered_chars = 0
-    for item in descriptors:
-        columns = item.get("columns", [])
-        columns = columns if isinstance(columns, (list, tuple)) else []
-        entry = {
-            "id": item.get("id"),
-            "title": str(item.get("title", ""))[:160],
-            "row_count": item.get("row_count"),
-            "columns": [
-                {
-                    "name": column.get("name"),
-                    "type": column.get("type"),
-                    "unit": column.get("unit"),
-                }
-                for column in columns[:24] if isinstance(column, Mapping)
-            ],
-            "more_columns": max(0, len(columns) - 24),
-            "scope": item.get("scope"),
-            "accepted": item.get("accepted"),
-            "source": str(item.get("source", ""))[:120],
-        }
-        size = len(json.dumps(entry, ensure_ascii=False, separators=(",", ":")))
-        if compact and rendered_chars + size > 30_000:
-            break
-        compact.append(entry)
-        rendered_chars += size
-    return compact
 
 
 def validate_query_result(result: Mapping[str, Any]) -> dict[str, Any]:

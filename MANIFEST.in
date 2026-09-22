@@ -1,0 +1,15 @@
+prune tests
+prune diagnostics
+prune development_archive
+prune publication_tools
+prune publication_reports
+prune lattice_exports
+prune research_projects
+prune research_runs*
+prune benchmarks
+prune .venv
+prune JuTrack.jl
+exclude .env
+exclude scripts/validate_*.py
+exclude scripts/release_trial_support.py
+global-exclude __pycache__ *.py[cod] *.dmp

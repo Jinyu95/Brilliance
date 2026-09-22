@@ -1,0 +1,56 @@
+# Non-secret model configuration. Keys belong in .env; runtime policies in research_runtime.toml.
+# Changes made through Models & account affect subsequent turns, not active calculations.
+[selection]
+profile = "chatgpt"
+
+[profiles.chatgpt]
+name = "ChatGPT subscription (official Codex)"
+provider = "chatgpt"
+# Empty means the default discovered by Codex, not a guessed model name.
+model = "gpt-6-astra"
+reasoning_effort = "high"
+
+[profiles.ihep]
+name = "IHEP / HepAI API"
+provider = "custom"
+provider_id = "hepai"
+base_url = "https://ai.ihep.ac.cn/apiv2"
+api_key_env = "HEPAI_API_KEY"
+model = "openai/gpt-6-astra"
+wire_api = "responses"
+context_window = 128000
+reasoning_effort = "high"
+
+[profiles.openai_api]
+name = "OpenAI API (separate billing)"
+provider = "openai"
+auth = "api_key"
+model = "gpt-6-astra"
+reasoning_effort = "high"
+
+# Advanced options: defaults suit normal use. These are not JuTrack time limits.
+[agent]
+native = true
+wire_api = "auto"
+model_timeout_s = 180
+steps = 32
+max_tokens = 16384
+max_tokens_ceiling = 65536
+stream = true
+stream_usage = false
+context_rollover_ratio = 0.82
+
+[transport]
+request_retries = 1
+stream_retries = 1
+stream_idle_timeout_s = 120
+
+[interface]
+heartbeat_s = 10
+chat_update_interval_s = 60
+
+# Native/IHEP search. Codex subscription also has its own live web tool.
+# Crossref is a keyless scholarly-metadata fallback, not general web/full text.
+[search]
+providers = ["brave", "crossref", "duckduckgo"]
+brave_api_key_env = "BRAVE_SEARCH_API_KEY"

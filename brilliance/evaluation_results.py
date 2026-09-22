@@ -51,7 +51,7 @@ def evaluation_snapshot(evaluation: Any) -> EvaluationSnapshot:
     """Read geometry, optics, radiation and checks through one fixed dictionary.
 
     Accepts api.evaluate's typed result, api.evaluate_periodic_cell's dictionary,
-    or their saved JSON dictionaries. This never starts JuTrack, recalculates a
+    editor.evaluate_candidate's result, or saved JSON dictionaries. This never starts JuTrack, recalculates a
     lattice, expands a reference ring or accepts a research result. Preserve the
     ORIGINAL returned evaluation for finish(candidate_evaluation=...); this
     normalized view is for reading/reporting, not a replacement receipt payload.
@@ -66,6 +66,14 @@ def evaluation_snapshot(evaluation: Any) -> EvaluationSnapshot:
     if not isinstance(raw, Mapping) or raw.get("engine") != "JuTrack":
         raise TypeError("evaluation_snapshot requires a high-level JuTrack evaluation result")
     raw = json_safe(dict(raw))  # detached JSON values, including restored receipt dictionaries
+    if raw.get("schema") == "brilliance_editor_evaluation/v1":
+        from .accelerator_api import periodic_cell
+        candidate = periodic_cell(title="Exact evaluated editor candidate", energy_gev=raw["energy_gev"],
+                                  elements=raw["elements"], intended_repetitions=raw["periods"],
+                                  source="JuTrackLatticeEditor.evaluate_candidate snapshot")
+        raw["evaluation_geometry"] = evaluated_geometry(candidate, reference_periods=raw["periods"])
+        raw["geometry"] = {"ring_bend_closure_required": False}
+        raw["evaluation_scope"] = "periodic_cell"
     if raw.get("schema") == SCHEMA:
         return raw
     if not isinstance(raw.get("linear_optics"), Mapping) or not isinstance(raw.get("geometry"), Mapping):
@@ -107,6 +115,10 @@ def evaluation_snapshot(evaluation: Any) -> EvaluationSnapshot:
                       (value for value in sampled if value is not None), default=None),
                   maximum_beta_is_sampled=True, periodic_residuals=dict(linear.get("periodic_residuals") or {}),
                   one_turn_matrix=list(linear.get("one_turn_matrix") or []))
+    linear["boundary_optics"] = {key: linear[key] if linear["stable"] is True else None for key in (
+        "beta_x_m", "beta_y_m", "alpha_x", "alpha_y", "Dx_m", "Dpx", "Dy_m", "Dpy")}
+    linear["boundary_optics_available"] = linear["stable"] is True and all(
+        linear["boundary_optics"][key] is not None for key in ("beta_x_m", "beta_y_m", "Dx_m", "Dpx"))
     radiation = dict(raw.get("radiation") or {})
     radiation.setdefault("computed", False)
     radiation.setdefault("reason", None if radiation["computed"] else "Radiation was not requested or is unavailable in this evaluation.")
@@ -133,7 +145,7 @@ def evaluation_snapshot(evaluation: Any) -> EvaluationSnapshot:
             "candidate_lattice_id": geometry.get("candidate_lattice_id") or raw.get("candidate_lattice_id"),
             "scope": scope, "geometry": geometry, "linear_optics": linear, "radiation": radiation,
             "chromaticity": chromaticity, "checks": checks,
-            "acceptance": {"accepted": False, "status": "not_submitted_for_acceptance", "publication_required": True,
+            "acceptance": {"accepted": False, "status": "not_assessed", "publication_required": False,
                            "machine_requirements": "not_assessed", "scientific_request": "not_assessed",
                            "full_ring_validation_required": not checks["full_ring_evaluated"]},
             "evaluation_receipt": raw.get("evaluation_receipt")}

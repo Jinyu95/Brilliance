@@ -27,6 +27,51 @@ class StageMessage:
     evidence: Mapping[str, Any] | None = None
 
 
+def compact_operational_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse platform chatter in the view; never edit history or scientific prose."""
+    output: list[dict[str, Any]] = []
+    for message in messages:
+        content = str(message.get("content", "")).strip()
+        meta = message.get("meta") or {}
+        operational = (
+            content.startswith("Preflight advisory:")
+            or meta.get("scientific_role") == "activity"
+            or content.startswith("**Execution ") and "submitted as a durable JuTrack calculation" in content
+            or content.startswith("The long calculation was submitted as")
+            or content.startswith("The durable calculation `")
+            or content.startswith("Model: **") and "saved research evidence" in content
+        )
+        failure = content.startswith((
+            "This calculation could not complete.",
+            "This execution stopped before the stage finished.",
+            "The iterative research loop stopped before a defensible result was ready.",
+            "The research turn stopped at its operational boundary:",
+            "The background research worker was interrupted while handling",
+        ))
+        if message.get("role") != "assistant" or not content or not (operational or failure):
+            output.append(message)
+            continue
+        # Scientific attachments must stay visible even on an operational message.
+        attachments = list(message.get("attachments") or [])
+        row = {"id": message["id"], "timestamp": message.get("timestamp"), "text": content}
+        headline = ""
+        if failure:
+            headline = ("An execution issue occurred; saved results were preserved. "
+                        "See technical details for the error and recovery status.")
+        entry = {**message, "content": headline,
+                 "meta": {**meta, "presentation_role": "technical_details"},
+                 "attachments": [*attachments, {"type": "technical_details", "title": "Technical details",
+                                                 "rows": [row]}]}
+        if (not failure and not attachments and output
+                and output[-1].get("meta", {}).get("presentation_role") == "technical_details"
+                and not output[-1].get("content")
+                and len(output[-1].get("attachments", [])) == 1):
+            output[-1]["attachments"][0]["rows"].append(row)
+        else:
+            output.append(entry)
+    return output
+
+
 def deduplicate_chat_attachments(messages: list[dict[str, Any]]) -> None:
     """Reference repeated evidence without hiding new candidate results.
 
@@ -55,6 +100,16 @@ def deduplicate_chat_attachments(messages: list[dict[str, Any]]) -> None:
             from .jobs import _markdown_rows
             summaries = [item for item in message.get("attachments", [])
                          if isinstance(item, Mapping) and item.get("type") == "evidence_summary"]
+            from .output_tables import output_tables
+            for item in summaries:
+                if item.get("program_stdout") and not item.get("tables"):
+                    item["tables"] = output_tables(item["program_stdout"])
+            # Read-only migration of the exact old platform log-as-table block.
+            content = str(message.get("content", ""))
+            if any(item.get("program_stdout") for item in summaries):
+                message["content"] = re.sub(
+                    r"\| Quantity \| Value \|\n\|---\|---:\|\n(?:\|[^\n]*\|\n?)+",
+                    "Raw execution logs are available under Program output.\n", content, count=1)
             if any(table for item in summaries for table in item.get("tables", [])
                    if isinstance(table, Mapping) and not table.get("generated_from_evidence")):
                 for item in summaries:
@@ -496,108 +551,8 @@ def final_result_text(project: Any) -> str:
     )
 
 
-def answer_project_question(project: Any, question: str) -> str:
-    """Answer common scientific questions immediately from bounded evidence."""
-    query = " ".join(question.lower().split())
-    results = _results_by_capability(project)
-
-    if any(word in query for word in ("status", "progress", "finished", "done")):
-        accepted = sum(task.status == "accepted" for task in project.tasks)
-        current = next((task for task in project.tasks if task.id == project.current_task_id), None)
-        tail = "The research chain is complete." if current is None else f"The current stage is **{current.title}**."
-        return f"**{accepted}/{len(project.tasks)} stages are accepted.** {tail}"
-
-    if any(word in query for word in ("emittance", "radiation", "integral", "energy spread")):
-        result = results.get("radiation_analysis", {})
-        if result:
-            return (
-                f"JuTrack predicts **{_number(result.get('emittance_pm'), 3)} pm rad** natural "
-                f"emittance and **{_percent(result.get('energy_spread'), 4)}** rms energy spread. "
-                f"The result comes from I1–I5 of the accepted full ring, with damping partitions "
-                f"({_number(result.get('Jx'), 4)}, {_number(result.get('Jy'), 4)}, "
-                f"{_number(result.get('Jz'), 4)})."
-            )
-
-    if any(word in query for word in ("circumference", "lattice", "element", "layout", "ring")):
-        result = results.get("lattice_construction", {})
-        if result:
-            proxy = _is_proxy_ring(result)
-            return (
-                f"The accepted JuTrack {'homogeneous recurring-cell proxy' if proxy else 'ring'} "
-                f"contains **{len(_lattice_elements(result)):,} elements** "
-                f"and is **{_number(result.get('circumference_m'), 3)} m** long. Its summed bend is "
-                f"{_number(result.get('bend_sum_rad'), 7)} rad with closure error "
-                f"{_scientific(result.get('geometry_closure_error_rad'))} rad. "
-                + (
-                    "It repeats one recurring cell and does not include matched dispersion "
-                    "suppressors or insertion straights."
-                    if proxy else "The ring and one recurring MBA block are plotted in the final result."
-                )
-            )
-
-    if any(word in query for word in ("optics", "tune", "beta", "dispersion", "twiss")):
-        result = results.get("linear_matching", {})
-        if result:
-            profile = _mapping_list(result.get("twiss_profile"))
-            return (
-                f"The ring is **linearly stable** with fractional tunes "
-                f"({_number(result.get('tune_x'), 5)}, {_number(result.get('tune_y'), 5)}). "
-                f"Across {len(profile):,} Twiss points, max βx = {_number(_max_abs(profile, 'beta_x'), 3)} m, "
-                f"max βy = {_number(_max_abs(profile, 'beta_y'), 3)} m, and max |Dx| = "
-                f"{_number(_max_abs(profile, 'Dx'), 4)} m."
-            )
-
-    if any(word in query for word in ("chromatic", "sextupole", "k2")):
-        result = results.get("chromatic_correction", {})
-        if result:
-            return summarize_stage(_TaskProxy("chromatic_correction", "Chromatic correction"), {"structured_result": result})
-
-    if any(word in query for word in ("aperture", "tracking", "nonlinear", "momentum")):
-        result = results.get("nonlinear_tracking", {})
-        if result:
-            return summarize_stage(_TaskProxy("nonlinear_tracking", "Nonlinear tracking"), {"structured_result": result})
-
-    if any(word in query for word in ("error", "robust", "correction", "seed")):
-        result = results.get("error_correction", {})
-        if result:
-            return summarize_stage(_TaskProxy("error_correction", "Robustness"), {"structured_result": result})
-
-    if any(word in query for word in ("trust", "valid", "confidence", "cross", "independent")):
-        result = results.get("cross_validation", {})
-        if result:
-            return summarize_stage(_TaskProxy("cross_validation", "Cross-validation"), {"structured_result": result})
-
-    if any(word in query for word in ("limit", "uncertain", "assumption", "caveat", "missing")):
-        limitations = project_limitations(project)
-        if limitations:
-            return "The present claim is bounded by:\n\n" + "\n".join(f"- {item}" for item in limitations[:8])
-
-    if any(word in query for word in ("source", "paper", "literature", "reference")):
-        result = results.get("knowledge_synthesis", {})
-        sources = _mapping_list(result.get("sources"))
-        if sources:
-            lines = [f"- {item.get('title', item.get('locator', 'Source'))}: {item.get('locator', '')}" for item in sources[:6]]
-            return f"The research stage archived **{len(sources)} traceable records**:\n\n" + "\n".join(lines)
-
-    return (
-        "I could not map that request to an accepted evidence field or a registered follow-up "
-        "tool, so I will not replace it with unrelated headline metrics. You can ask for a "
-        "specific value or comparison, request a plot of the lattice, optics, radiation, "
-        "chromaticity, dynamic aperture, robustness, or validation data, or state a design "
-        "change to start a new evidence-preserving revision."
-    )
 
 
-def looks_like_project_revision(message: str) -> bool:
-    """Conservatively distinguish a design change from a result question."""
-    text = " ".join(message.lower().split())
-    if text.endswith("?") and not re.search(r"\b(can you|please)\s+(change|set|use|add|remove|rerun)", text):
-        return False
-    return bool(re.search(
-        r"\b(change|revise|modify|set|use|require|target|limit|constrain|add|remove|"
-        r"rerun|re-run|optimize|make)\b",
-        text,
-    ))
 
 
 def project_limitations(project: Any) -> list[str]:
@@ -715,6 +670,16 @@ class ResearchConversationStore:
                 handle.write(rendered)
         except FileExistsError:
             pass
+        from .conversation_checkpoints import ConversationCheckpoints
+        checkpoints = ConversationCheckpoints(self.root)
+        try:
+            checkpoints.capture(project_id, path)
+        except Exception as exc:
+            # Optional archival must never lose a scientific chat or fail a job.
+            try:
+                checkpoints.record_failure(project_id, path, exc)
+            except OSError:
+                pass
         return path
 
     def messages(self, project_id: str) -> list[Mapping[str, Any]]:
@@ -726,9 +691,14 @@ class ResearchConversationStore:
             except (OSError, json.JSONDecodeError):
                 continue
             timestamp = payload.get("timestamp", "")
-            for message in payload.get("messages", []):
+            payload_messages = payload.get("messages", [])
+            for index, message in enumerate(payload_messages):
                 if isinstance(message, Mapping):
-                    messages.append({**dict(message), "timestamp": timestamp})
+                    checkpoint = self.root / project_id / "chat_checkpoints" / path.name
+                    meta = dict(message.get("meta") or {})
+                    if index == len(payload_messages) - 1 and checkpoint.is_file():
+                        meta["conversation_checkpoint"] = path.stem
+                    messages.append({**dict(message), "timestamp": timestamp, "meta": meta})
         return messages
 
 
@@ -841,8 +811,6 @@ def _micrometres(value: Any) -> str:
     return f"{1.0e6 * float(value):,.3f} µm" if _finite(value) else "n/a"
 
 
-def _float(value: Any) -> float:
-    return float(value) if _finite(value) else 0.0
 
 
 def _finite(value: Any) -> bool:

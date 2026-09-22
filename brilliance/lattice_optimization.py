@@ -15,6 +15,7 @@ continuation, and response matching) remain tested platform code.
 from __future__ import annotations
 
 import copy
+import json
 import math
 from dataclasses import dataclass
 from numbers import Real
@@ -352,7 +353,8 @@ class JuTrackLatticeEditor:
         *,
         energy_gev: float,
         periods: int,
-        include_profile: bool = False,
+        include_profile: bool = True,
+        output_path: str | Path | None = None,
     ) -> dict[str, Any]:
         """Apply one explicit candidate and bind optics/radiation to its snapshot.
 
@@ -361,6 +363,8 @@ class JuTrackLatticeEditor:
         propagate rather than being mislabeled as infeasible physics. This is a
         sequential transaction: parallel workers must each own their editor.
         A selected periodic candidate still needs independent full-ring validation.
+        output_path atomically saves the exact result before caller reporting.
+        Use api.evaluation_snapshot(result) for safe missing-value handling.
         """
         if not math.isfinite(energy_gev) or energy_gev <= 0:
             raise ValueError("energy_gev must be finite and positive")
@@ -373,10 +377,23 @@ class JuTrackLatticeEditor:
         linear = self.linear_metrics(include_profile=include_profile)
         radiation = None
         if linear.get("stable") is True:
-            radiation = jutrack_periodic_radiation_metrics(
-                self.jt, self.lattice, energy_gev=energy_gev, periods=periods,
-            )
-        return {
+            try:
+                radiation = jutrack_periodic_radiation_metrics(
+                    self.jt, self.lattice, energy_gev=energy_gev, periods=periods,
+                )
+            except Exception as exc:
+                # Reject this proposal, not the whole search. Do not claim a
+                # physical diagnosis or hide API/bridge/programming failures.
+                if not (type(exc).__name__ == "JuliaError"
+                        and type(exc).__module__.split(".")[0] == "juliacall"
+                        and "DomainError" in str(exc)):
+                    raise
+                radiation = {"computed": False, "reason": "JuTrack ringpara domain error",
+                             "error": str(exc), "physical_validity": {"passed": False},
+                             "diagnosis": "Cause not established; exact trial elements retained."}
+        result = {
+            "schema": "brilliance_editor_evaluation/v1",
+            "engine": "JuTrack",
             "elements": snapshot,
             "energy_gev": float(energy_gev),
             "periods": int(periods),
@@ -389,6 +406,17 @@ class JuTrackLatticeEditor:
             ),
             "full_ring_validation_required": True,
         }
+        result["status"] = "evaluated" if result["passed"] else "rejected"
+        result["issues"] = ([] if result["passed"] else [str(
+            linear.get("reason") or linear.get("failure") or
+            ("No stable periodic optics; boundary optics and radiation are unavailable."
+             if linear.get("stable") is not True else
+             (radiation or {}).get("reason") or "Radiation validity checks did not pass."))])
+        if output_path is not None:
+            from .artifacts import json_safe
+            from .atomic_io import atomic_write_text
+            atomic_write_text(Path(output_path), json.dumps(json_safe(result), ensure_ascii=False, indent=2))
+        return result
 
     def apply_parameterization(
         self,
@@ -487,6 +515,11 @@ def jutrack_linear_metrics(
                 or metrics["beta_x_m"] <= 0 or metrics["beta_y_m"] <= 0):
             return {"stable": False, "trace_x": trace_x, "trace_y": trace_y,
                     "reason": "JuTrack periodic Twiss has nonfinite or nonpositive physical optics"}
+        metrics["boundary_optics"] = {key: metrics[key] for key in (
+            "Dx_m", "Dpx", "Dy_m", "Dpy", "beta_x_m", "beta_y_m", "alpha_x", "alpha_y")}
+        metrics["boundary_location"] = "periodic lattice entrance, s=0"
+        metrics["profile_sampling"] = "not_evaluated"
+        metrics["maximum_beta_m"] = None
         if include_profile:
             points = jt.twissline(
                 periodic,
@@ -514,6 +547,14 @@ def jutrack_linear_metrics(
                 element = lattice[index]
                 s_m += float(element.len)
                 profile.append(profile_row(point, str(element.name), s_m))
+            if any(not math.isfinite(row[key]) for row in profile
+                   for key in ("beta_x", "beta_y", "Dx", "Dpx")) or any(
+                       row["beta_x"] <= 0 or row["beta_y"] <= 0 for row in profile):
+                return {**metrics, "stable": False,
+                        "reason": "JuTrack sampled profile contains nonphysical optics"}
+            metrics["profile_sampling"] = "entrance_and_element_exits; interior extrema not guaranteed"
+            metrics["maximum_beta_x_m"] = max(row["beta_x"] for row in profile)
+            metrics["maximum_beta_y_m"] = max(row["beta_y"] for row in profile)
             metrics["maximum_beta_m"] = max(
                 [metrics["beta_x_m"], metrics["beta_y_m"]]
                 + [value for row in profile for value in (row["beta_x"], row["beta_y"])]
@@ -1897,16 +1938,16 @@ def plan_lattice_optimization(
     *,
     population_size: int | None = None,
     generations: int | None = None,
-    minimum_population_per_knob: float = 10.0,
-    minimum_production_generations: int = 20,
+    minimum_population_per_knob: float = 0.0,
+    minimum_production_generations: int = 0,
 ) -> dict[str, Any]:
     """Validate ownership and size a campaign from its ACTUAL compiled knobs.
 
     Pure Python: no JuTrack import, callbacks, workers or optimization. Call
     before creating simulation objects and show ``knob_table`` to the user.
-    Managed research promotes undersized budgets using the scientist's runtime
-    configuration before allocating seeds or workers. Standalone calls retain
-    explicit caller-declared budget checks for lightweight kernel tests.
+    Explicit budgets are respected in managed and standalone research. Callers
+    may optionally declare their own minimum budget, but there is no imposed
+    population-per-knob rule or production generation count.
     This is a coding preflight, NOT a claim of physical feasibility/convergence.
     """
     def integer(value: Any, name: str, minimum: int) -> int:
@@ -1922,21 +1963,15 @@ def plan_lattice_optimization(
     if ratio is None or ratio < 0:
         raise OptimizerInputError("minimum_population_per_knob must be finite and non-negative")
     minimum_generations = integer(minimum_production_generations, "minimum_production_generations", 0)
-    generation_count = integer(generations, "generations", 1) if generations is not None else 80
+    generation_count = integer(generations, "generations", 1) if generations is not None else None
     requested_population = integer(population_size, "population_size", 2) if population_size is not None else None
     from .optimization_budget import resolve_population_budget
 
-    budget = resolve_population_budget(count, requested_population,
-                                       generation_count if generations is not None else None)
-    if budget["managed_research"]:
-        ratio = budget["policy"]["minimum_population_per_knob"]
-        minimum_generations = budget["policy"]["minimum_generations"]
-        generation_count = budget["effective"]["generations"]
+    budget = resolve_population_budget(count, requested_population, generation_count)
+    generation_count = budget["effective"]["generations"]
     if generation_count < minimum_generations:
         raise OptimizerInputError(
-            f"generations={generations} is below the declared production minimum "
-            f"of {minimum_generations}; pass minimum_production_generations=0 only "
-            "for an explicitly labelled smoke test"
+            f"generations={generations} is below the caller-declared minimum of {minimum_generations}"
         )
     design_ownership = {(name, knob.field) for knob in design_parameterization.knobs
                         for name in knob.target_names}
@@ -1949,19 +1984,14 @@ def plan_lattice_optimization(
             "outer design and in-objective matcher cannot own the same lattice field: " + rendered
         )
     required_population = max(2, math.ceil(ratio * count))
-    population = max(500, required_population) if population_size is None else integer(
-        population_size, "population_size", 2
-    )
-    if budget["managed_research"]:
-        required_population = budget["policy"]["population_floor"]
-        population = budget["effective"]["population_size"]
+    population = budget["effective"]["population_size"]
+    if population_size is None:
+        population = max(population, required_population)
     by_field = design_parameterization.as_dict()["variable_count_by_field"]
     if population < required_population:
         raise OptimizerInputError(
-            f"population_size={population} is below the declared production minimum "
-            f"of {required_population} for {count} outer knobs (by field: {by_field}). "
-            "Review the compiled element/field ownership, then size the population from "
-            "plan_lattice_optimization. Do not lower the production policy or alter physics limits."
+            f"population_size={population} is below the caller-declared minimum "
+            f"of {required_population} for {count} outer knobs (by field: {by_field})."
         )
     if budget["effective"] != {"population_size": population, "generations": generation_count}:
         budget["effective"] = {"population_size": population, "generations": generation_count}
@@ -2012,8 +2042,8 @@ def optimize_lattice_parameters(
     require_feasible_initial_population: bool = True,
     initialization_attempts_per_particle: int = 100,
     initial_feasible_sigma_fraction: float = 0.002,
-    minimum_population_per_knob: float = 10.0,
-    minimum_production_generations: int = 20,
+    minimum_population_per_knob: float = 0.0,
+    minimum_production_generations: int = 0,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
     cancellation_check: Callable[[], None] | None = None,
     batch_evaluator_factory: PositionBatchEvaluatorFactory | None = None,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -325,12 +324,3 @@ class ExpertModule:
                 "tools": [item.as_dict() for item in self.tools],
             })
         return value
-
-
-def parse_json_schema(value: str) -> Mapping[str, Any]:
-    """Small helper for expert authors who keep schemas in JSON strings."""
-
-    parsed = json.loads(value)
-    if not isinstance(parsed, Mapping):
-        raise ExpertModuleError("parameter schema JSON must contain one object")
-    return parsed

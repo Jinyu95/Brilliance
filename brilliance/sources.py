@@ -126,22 +126,6 @@ class LocalResearchCorpus:
         return True, "Local source record verified."
 
 
-def software_source(
-    *, title: str, locator: str, description: str, value_class: str = "analytical_model"
-) -> SourceRecord:
-    identity = {
-        "title": title, "locator": locator, "description": description,
-        "value_class": value_class,
-    }
-    return SourceRecord(
-        source_id="source-" + content_hash(identity, length=16),
-        title=title,
-        locator=locator,
-        source_type="software",
-        value_class=value_class,
-        excerpt=description,
-        content_sha256=hashlib.sha256(description.encode("utf-8")).hexdigest(),
-    )
 
 
 def _tokens(text: str) -> set[str]:
@@ -168,4 +152,3 @@ def _document_title(lines: list[str], fallback: str) -> str:
         if line.startswith("# "):
             return line[2:].strip()
     return fallback.replace("_", " ").strip().title()
-

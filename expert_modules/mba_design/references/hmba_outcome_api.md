@@ -1,146 +1,82 @@
-# Hybrid-MBA outcome evidence
+# MBA design decisions: radiation, chromatic optics and acceptance
 
-Hybrid requests require measured physics evidence. Write construction, matching,
-residuals and objectives in the project's Python program using the general tools.
-The old complete design controllers have been removed, not hidden or aliased.
+These are hypotheses, not a required route. Compare JuTrack candidates under
+consistent requirements. Conventional, hybrid or higher-order-achromat layouts
+may win; more bends are not automatically better.
 
-## Physical hypothesis
+## Decide from measurements
 
-Start a conversion from this project's measured conventional MBA, not a new
-arbitrary seven-bend line. Identify bends in longitudinal order. For the outer
-DBA-like hypothesis, B1–B2 and B(M−1)–BM create the chromatic regions; B3–B(M−2)
-form the low-H core. Both distinct SF and SD drift slots on the left belong
-between B1 and B2, with global mirror partners in the right outer pair. The
-suppressor is the transition between that chromatic region and the core, not
-another name for the SD site. Count real finite installation space, not a high
-dispersion value inside a bend. Recompute periodic optics after each change.
-
-Large useful dispersion at sextupoles can reduce chromatic strength burden.
-Appropriate phase and endpoint optics between paired sextupoles can suppress
-geometric aberrations; equal beta or a nominal phase alone is not proof of
-nonlinear cancellation. State the chosen pair hypothesis and evaluate its real
-transfer matrices, then measured chromatic response and tracking. Those later
-conditions are not implied by passing the linear-shape check below. Preserve
-machine requirements, not inherited seed tunes or arbitrary core-optics targets.
-
-## Final measurement, independent of the design program
-
-Use `mba.HybridMeasurement(parent, machine_contract=machine,
-shape_requirements=shape_targets, maximum_emittance_pm=approved_search_ceiling,
-budget_provenance=approval_record, max_step_m=step)` as the general match/PSO
-callback. It accepts exact proposed rows, not a stored facility seed. Its
-`D_bump_L_m`, `D_bump_R_m`, `D_core_m` and `H_core_max_m` come from the same
-measurement as final checking. `shape` records positions, regions, map-checked
-sampling and available drift intervals. `global_max_dispersion_m` is a separate
-whole-cell diagnostic. Never replace these regions with unit-name filters.
-Optional `machine["installation_slots"]` maps SF_L/SD_L/SF_R/SD_R to ordered
-real drift-name lists. Both left slots must be disjoint spans in B1–B2, with
-global mirror partners in the right region; adjacent drifts are allowed.
-Search and checking report identical native slot extrema/positions. Omitting
-the mapping reports `not_declared`, never an implied sextupole-pair design.
-Keep shape objectives separate from radiation feasibility: the callback retains
-actual emittance/I2/I5 but sets `feasible=False` outside the declared radiation
-budget. A budget must be approved before production; no multiplier of the parent
-or aspiration is silently made a requirement. Original caps still apply.
-Pass the observer's `machine` contract to final verification: it records the
-separate `hybrid_radiation_budget` ceiling/provenance, which the final ring
-checker also enforces. A conflicting declared budget is an input error.
-
-Geometry changes require a matched feasible initialization before production.
-Use a separate feasibility experiment when needed; never start production from
-an unstable sentinel-valued point or promote a radiation-rejected continuation.
-A failed construction, failed match, bound saturation or exhausted finite budget
-does not prove that a topology cannot work. Report exact candidate IDs and count
-independent knobs separately from physical magnets. No new campaign is warranted
-until optimizer/checker observations agree for the same rows and sampling.
-
-```python
-mba = api.expert_module("laboratory.mba_design")
-report = mba.verify_hmba_candidate(
-    candidate,
-    machine_contract=machine,
-    shape_requirements=shape_targets,
-    sampling_steps_m=[coarse_step_m, fine_step_m],
-    relative_tolerance=approved_relative_tolerance,
-)
-```
-
-This function does **no construction, matching or optimization**. It measures
-the exact selected candidate with JuTrack at two resolutions and independently
-evaluates its full repeated ring. It archives measurements using the existing
-candidate-evaluation receipt mechanism. The application rechecks the receipt,
-physical rows and numerical outcomes; setting `passed=True` is not evidence.
-Standalone tests may pass `output_directory`; managed programs must use their
-configured output directory. The exact candidate must also be passed with its
-high-level `candidate_evaluation` to `run.finish`.
-
-## Original requirements versus proposed targets
-
-`machine_contract` is a mapping with the following fields. Recover original
-values from this project's saved contract; disclose and obtain approval for
-missing requirements. Do not infer limits from an existing facility or change
-them to make a parent or trial pass.
-
-| Group | Required fields |
+| Observation | Useful experiment |
 | --- | --- |
-| Machine | `energy_gev`, `periods`, `expected_cell_length_m`, `expected_cell_angle_rad`, `expected_bends` |
-| Physical space | `minimum_magnet_length_m`, `minimum_drift_length_m`, `id_drift_names`, `id_length_m` |
-| Engineering | `limits`: the explicit energy-dependent envelope returned by `api.magnet_strength_limits` with the approved technology parameters |
-| Achromat | `achromat_dx_tolerance_m`, `achromat_dpx_tolerance` |
-| Optional original caps | `maximum_beta_m`, `maximum_emittance_pm`, `maximum_energy_spread`; explicitly `None` when unspecified |
-| Provenance | `limit_provenance`: a nonempty mapping identifying original values and any approved changes |
+| Low emittance but excessive sextupole demand | Vary sextupole-site dispersion and beta separation together with low-H bending optics; compare emittance, natural chromaticities and required integrated strengths. |
+| Corrected chromaticity but poor acceptance | Examine pair maps, tune footprints, amplitude detuning and both-sign off-momentum tracking; distinguish cancellation errors from inadequate nonlinear controls. |
+| Family strengths saturate or barely affect objectives | Measure response and its singular values; test family regrouping or site relocation before merely increasing search size. |
+| A changed bend profile lowers emittance | Re-match the complete cell/ring and compare radiation, damping and acceptance at consistent field, space and aperture assumptions. |
 
-Preserve optional `id_beta_x_bounds_m` and `id_beta_y_bounds_m` when specified.
-An emittance aspiration is not automatically a hard validity cap.
+The SAPS study optimizes emittance, natural chromaticity and sextupole strength
+together, then tests nonlinear dynamics. None of these linear proxies guarantees
+large acceptance. Its damping-time trade-off also shows why emittance alone is
+insufficient. Learn these trade-offs, not its magnet settings or quoted aperture.
+[Zhao, Jiao & Wang, 2021](https://arxiv.org/abs/2105.14492).
 
-`shape_requirements` separately declares the proposed linear-shape targets:
-`min_bump_m`, `min_contrast` (>1), `max_core_dispersion_m`, `max_core_h_m`,
-`min_usable_drift_m`, `min_total_usable_drift_m`, `max_drift_slope`, `max_beta_m`,
-`peak_slope_tolerance`, `id_dispersion_tolerance_m`, `id_slope_tolerance`,
-`max_sample_step_m`. State which are new approved shape targets rather than
-original machine limits. Shape tolerances cannot relax original achromat limits.
-Choose a positive fine step smaller than the coarse step; convergence tolerance
-is explicit and must not be silently loosened.
+## Sites and cancellation
 
-The current shape diagnostic covers homogeneous positive-bend MBAs with two
-outer inter-bend chromatic regions and a middle core. It measures actual interior
-maxima or usable drift plateaus, drift installation lengths, core dispersion/H,
-stability, achromat, symmetry, engineering limits and damped radiation. Bends are
-identified by physical order, not old unit names. Other architectures need an
-appropriate expert measurement adapter, not a fabricated passing report.
+For the common two-outer-bump hypothesis, number bends by longitudinal order:
+B1–B2 and B(M−1)–BM are outer regions, B3–B(M−2) the core. In a 7BA this means
+B3–B5, regardless of inherited unit names. Both SF/SD slots on one side can be
+distinct finite intervals inside that outer region; adjacent drifts may form one
+installation span. Measure actual site Dx, Dpx and both betas, not just a peak in
+a bend. Keep core H/I5 separate from bump contrast.
 
-## Completion and optimization
+Nominal −I cancellation organizes a search; it is not a tracking result.
+Evaluate complete two-plane pair maps, endpoint optics, finite sextupole lengths
+and off-momentum departures. Cancellation can also cross a straight between
+cells, changing the phase constraints on the arc. Do not hard-code within-cell
+pairing as the only hybrid architecture.
+[Tan et al., 2023](https://arxiv.org/abs/2212.01870).
 
-Use `acceptance={"hybrid_mba_linear": report}` for a verified **linear hybrid
-shape**. No 3π/π phase condition, sextupole correction or DA/MA is implicit in
-this claim. Additional requested performance needs its own measurements; do not
-call a linear shape an operational or nonlinear-validated design.
+## Phase and nonlinear controls
 
-When emittance optimization is requested, additionally publish the same report
-under `mba_emittance_optimization`, with:
+Choose phase neighborhoods using the actual ring periodicity and the resonance
+terms of interest; account for symmetry breaking, insertion sections and tune
+footprints. Do not copy a facility's fractional tunes. Higher-order-achromat
+schemes offer distributed cancellation, with different off-momentum trade-offs.
+Measure the two-plane chromatic response: a QR/SVD nullspace can expose remaining
+family combinations while holding chromaticities to target. Re-correct after
+finite moves. Test harmonic families, positions or octupoles when measured
+detuning/resonances justify them—not because more magnets must help.
+[SOLEIL HOA study, 2019](https://proceedings.jacow.org/ipac2019/papers/moprb005.pdf).
 
-```python
-report["optimization"] = {
-    "method": "describe the actual algorithm and objective",
-    "termination_reason": "describe its observed stopping condition",
-    "selection_reason": "explain the measured baseline comparison",
-    "selected_index": selected_index,
-    "trials": [
-        {"candidate": baseline.as_dict(),
-         "measurement_receipt": baseline_report["measurement_receipt"]},
-        # Actual measured candidates, including the selected candidate.
-    ],
-}
-```
+## Joint search and field shaping
 
-The first trial is the baseline. Preserve the actual search history as a separate
-artifact as well. At least two distinct measured physical snapshots are needed;
-all comparisons keep the same machine contract. The selected trial must be the
-exact final candidate and receipt, with lower independently measured emittance
-than the baseline. A local optimizer or a callback with inner matching is valid;
-PSO generations and a specific result schema are not required. A baseline may
-fail hybrid-shape targets but must have a physical radiation equilibrium.
+Keep several matched, chromatically corrected candidates. Compare emittance,
+connected transverse acceptance and positive/negative momentum acceptance rather
+than optimizing an isolated scalar proxy. Use inexpensive screens to allocate
+tracking effort, then increase turns, spatial sampling and integration accuracy
+for finalists. This is a suggested experimental strategy, not a compulsory solver.
 
-Failed targets, unconverged sampling, or no improvement remain useful partial
-research: retain receipts, tables, plots and code with `request_satisfied=False`.
-Do not rerun seed generation merely to obtain a missing final measurement.
+Reverse bends and longitudinal field redistribution are distinct hypotheses.
+Compare under consistent length, angle, field and aperture constraints; inspect
+I2/I4/I5 and damping after complete-ring rematching. First-principles comparisons
+explain why local field changes cannot be judged from peak field alone.
+[Riemann & Streun, 2019](https://arxiv.org/abs/1810.11286).
+If using explicit segments, distinguish physical edges from internal interfaces
+and demonstrate convergence without adding spurious edge focusing. If JuTrack
+cannot represent the intended field/edge model reliably, report that limitation.
+
+## Measurements and reporting
+
+`mba.mba_radiation_report` supplies scoped TME normalization and per-bend grouping.
+`mba.hybrid_mba_bend_roles` and `mba.evaluate_hybrid_mba_shape` are optional
+two-bump diagnostics for symmetric positive homogeneous sector-bend MBAs (M≥5),
+not universal hybrid validators. Use identical region/slot definitions in the
+objective and final report; distinguish global peaks from useful site values.
+Read signatures for thresholds. Unsupported scope is not a
+physical impossibility. `mba.solve_chromatic_correction` measures response.
+
+Report candidate identity, launch location/Twiss, coordinates, turns, RF,
+radiation, physical apertures and error assumptions. On-axis energy survival is
+not local momentum acceptance around the ring; disconnected surviving islands
+are not an injection aperture. Compare papers only with these scopes disclosed.
+Show one-cell lattice/optics, chromatic footprints and acceptance when measured.
+A failed search is not proof that a topology cannot work.

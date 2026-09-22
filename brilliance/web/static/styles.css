@@ -243,6 +243,29 @@ button { color: inherit; }
 .model-configuration { width: min(560px, calc(100vw - 48px)); padding: 26px; border: 1px solid #d1ccc1; border-radius: 14px; line-height: 1.6; }
 .model-configuration::backdrop { background: rgb(0 0 0 / 35%); }
 .model-configuration h2 { margin-top: 0; }
+.model-configuration { max-height: calc(100vh - 48px); overflow-y: auto; }
+.model-configuration label { display: grid; gap: 5px; margin: 12px 0; }
+.model-configuration input, .model-configuration select { width: 100%; padding: 9px; box-sizing: border-box; }
+.model-configuration button { margin: 4px 3px 4px 0; }
+.model-configuration [hidden] { display: none; }
 .model-configuration li { margin: 12px 0; overflow-wrap: anywhere; }
 .evidence-sources { margin-top: 14px; font-size: 12px; color: #6d675f; overflow-wrap: anywhere; }
 .evidence-sources summary { cursor: pointer; }
+.technical-details { margin: 8px 0; color: #6d675f; font-size: 12px; }
+.technical-details summary { cursor: pointer; padding: 5px 0; }
+.technical-details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; padding: 10px; background: #f5f4f1; border-radius: 6px; }
+.technical-message { margin-block: 6px; }
+.technical-message .message-body { padding-block: 4px; }
+/* Conversation restore is a quiet, explicit branch action, never an implicit rewind. */
+.checkpoint-branch {
+  font-size: 0.75rem;
+  color: var(--muted, #64748b);
+  background: transparent;
+  border: 1px solid #d7dce3;
+  border-radius: 5px;
+  padding: 3px 8px;
+  margin-top: 6px;
+  cursor: pointer;
+}
+.checkpoint-branch:hover { background: #eef2f6; }
+.checkpoint-branch:disabled { opacity: .5; cursor: wait; }

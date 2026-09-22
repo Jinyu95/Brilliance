@@ -388,8 +388,6 @@ def evaluate_hybrid_mba_shape(
     if stage == "bump_feasibility":
         report["scope"] = "complete_cell_bump_feasibility_gate"
         report["limitations"].append("Intermediate usable-bump feasibility only; emittance recovery, chromatic correction and final acceptance remain pending. Source beta/dispersion preservation is optional, never inferred from ancestry.")
-    from brilliance.result_presentation import remember_candidate_evidence
-    remember_candidate_evidence(lattice, linear=linear)
     return report
 
 

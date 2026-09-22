@@ -10,6 +10,7 @@ from typing import Any, Mapping
 from .artifacts import content_hash
 from .failure_diagnostics import execution_failure_summary
 from .presentation import ResearchConversationStore
+from .research_environment import ResearchEnvironment
 from .workspace_inspection import saved_recovery_context
 
 _LEGACY_LATTICE_SCOPE_ERRORS = (
@@ -87,6 +88,17 @@ def coding_failure_summary(error: str) -> str | None:
 def program_failure_guidance(error: str) -> dict[str, str]:
     """Plain-language explanation and a narrow, non-physics repair instruction."""
     headline = execution_failure_summary(error)
+    if headline in {"KeyError: 'boundary_optics'", 'KeyError: "boundary_optics"'}:
+        return {
+            "explanation": "The program tried to report boundary optics that this evaluation did not provide. "
+                "A rejected or unstable candidate may legitimately have no periodic optics.",
+            "repair_hint": "Inspect the exact evaluation's stable/passed flags and rejection reason first. "
+                "Use api.evaluation_snapshot(evaluation) for reporting, including editor.evaluate_candidate results; "
+                "unavailable boundary values are None, never zero. Check boundary_optics_available. "
+                "Save selected editor evaluations with output_path before optional formatting. "
+                "Do not report an optimizer finalist as a matched lattice unless its measured checks pass. "
+                "Recover saved outputs before deciding whether another numerical experiment is necessary.",
+        }
     if _reporting_input_failure(headline):
         return {
             "explanation": "The generated program could not publish a progress or result update because "
@@ -168,10 +180,12 @@ def repair_pause_explanation(recovery: Mapping[str, Any]) -> str:
     if reason == "repair_handoff_failed":
         reason = "handoff_failed"
     reasons = {
-        "repair_disabled": "Automatic diagnosis and repair is disabled by BRILLIANCE_AUTO_REPAIR_ATTEMPTS=0. "
+        "repair_disabled": "Automatic diagnosis and repair is disabled by recovery.max_attempts_per_request=0 in the runtime TOML. "
             "Enable it to permit bounded recovery, or ask the agent to inspect the saved program.",
         "repair_budget_exhausted": "Automatic diagnosis and repair reached its configured limit for this request. "
             "The saved diagnostic needs review before another attempt; completed calculations were not reset.",
+        "same_error_budget_exhausted": "Edited attempts keep encountering the same error. "
+            "Automatic repair paused at recovery.max_attempts_per_error; inspect the saved diagnosis before retrying.",
         "same_source_failed_again": "The same unchanged program and inputs already failed with this error. "
             "Another automatic handoff was not started. Review the diagnosis and change the faulty code "
             "or inputs before retrying; do not repeat a completed calculation.",
@@ -235,7 +249,6 @@ def schedule_result_review(root: Path, jobs: Any, job: Any, project: Any,
                            scientist_origin: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Bring completed durable evidence back to the agent, without choosing physics."""
     from .codex_runtime import CodexRuntimeStore
-    from .jobs import launch_research_job
     from .research_session import SessionWorkspace
 
     native_boundary = job.action == "codex_turn" and scientist_origin is not None
@@ -304,11 +317,11 @@ def schedule_result_review(root: Path, jobs: Any, job: Any, project: Any,
     if jobs.active(project.id, action="codex_turn"):
         CodexRuntimeStore(root, project.id).queue_input(prompt)
     else:
-        review = jobs.submit(project.id, project.revision, action="codex_turn", payload={
+        jobs.submit(project.id, project.revision, action="codex_turn", payload={
             "message": prompt, "initial": False, "increment": 1, "max_increments": 1,
             "research_mode": "result_review", "review_of": job.job_id, "repair_request_id": origin["id"],
         })
-        launch_research_job(root, review)
+        # Queue only: the application's supervisor owns model-process launches.
     return record
 
 
@@ -320,7 +333,6 @@ def schedule_coding_repair(root: Path, jobs: Any, job: Any, project: Any,
     or repair the platform. Cancellation, scope and loop guards own admission.
     """
     from .codex_runtime import CodexRuntimeStore
-    from .jobs import launch_research_job
     from .research_session import SessionWorkspace
 
     if str(job.payload.get("tool_id")) not in {
@@ -336,10 +348,8 @@ def schedule_coding_repair(root: Path, jobs: Any, job: Any, project: Any,
     directory = root / project.id
     if SessionWorkspace(directory).pause_file.exists() or jobs.cancellation_requested(project.id, job.job_id):
         return {"scheduled": False, "reason": "scientist_paused_or_cancelled"}
-    try:
-        budget = min(3, max(0, int(os.environ.get("BRILLIANCE_AUTO_REPAIR_ATTEMPTS", "2"))))
-    except ValueError:
-        budget = 2
+    policy = ResearchEnvironment.load()
+    budget = policy.repair_max_attempts
     if budget == 0:
         return {"scheduled": False, "reason": "repair_disabled"}
     records = directory / "workspace" / "runtime_failures"
@@ -348,8 +358,6 @@ def schedule_coding_repair(root: Path, jobs: Any, job: Any, project: Any,
         return json.loads(marker.read_text(encoding="utf-8"))
     previous = [json.loads(path.read_text(encoding="utf-8")) for path in records.glob("*.recovery.json")]
     attempts = [item for item in previous if item.get("scientist_request_id") == origin["id"]]
-    if len(attempts) >= budget:
-        return {"scheduled": False, "reason": "repair_budget_exhausted"}
     arguments = job.payload.get("arguments", {})
     script = str(arguments.get("script", ""))
     workspace = directory / "workspace"
@@ -368,6 +376,15 @@ def schedule_coding_repair(root: Path, jobs: Any, job: Any, project: Any,
                                 "arguments": arguments_hash, "error": headline})
     if any(item.get("failure_key") == failure_key for item in attempts):
         return {"scheduled": False, "reason": "same_source_failed_again"}
+    # Moving to a distinct exception is observable debugging progress, not proof
+    # of physics progress. It receives its own allowance within the total cap.
+    error_key = content_hash(re.sub(r"0x[0-9a-fA-F]+", "<address>", headline))
+    repeated = sum(item.get("error_key", content_hash(item.get("summary", ""))) == error_key
+                   for item in attempts)
+    if repeated >= policy.repair_max_same_error:
+        return {"scheduled": False, "reason": "same_error_budget_exhausted"}
+    if len(attempts) >= budget:
+        return {"scheduled": False, "reason": "repair_budget_exhausted"}
     prompt = (
         "Automatic diagnosis and possible repair of a failed research execution, not a new scientist request. "
         "Any newer scientist instruction takes precedence over this repair notice.\n"
@@ -395,15 +412,20 @@ def schedule_coding_repair(root: Path, jobs: Any, job: Any, project: Any,
         "For runtime/access/credential/resource problems, perform read-only diagnosis first. Do not "
         "install packages, change interpreters or Julia configuration, permissions, credentials, "
         "internet policy, or physical requirements. If recovery needs new authority or a scientist "
-        "decision, preserve the checkpoint and ask one specific question. Do not search the internet "
-        "or substitute a stored template. Unknown errors are to be investigated, not automatically "
+        "decision, preserve the checkpoint and ask one specific question. Internet research follows "
+        "the configured network policy, including during recovery. Do not substitute a stored template. "
+        "After a repair, resume the original authorized research; recovery alone does not fulfill it. "
+        "Unknown errors are to be investigated, not automatically "
         "declared unrepairable."
         "\n" + program_failure_guidance(error)["repair_hint"] +
         "\n" + saved_recovery_context(directory / "workspace")
     )
     record = {"scheduled": True, "scientist_request_id": origin["id"], "failure_key": failure_key,
               "attempt": len(attempts) + 1, "source_sha": source_hash, "summary": headline,
-              "arguments_sha": arguments_hash, "mode": "diagnose_and_repair"}
+              "arguments_sha": arguments_hash, "mode": "diagnose_and_repair",
+              "error_key": error_key, "error_attempt": repeated + 1,
+              "policy": {"source": str(policy.config_path), "max_attempts_per_request": budget,
+                         "max_attempts_per_error": policy.repair_max_same_error}}
     records.mkdir(parents=True, exist_ok=True)
     # Claim the handoff once even if the completion notification is delivered twice.
     try:
@@ -415,10 +437,10 @@ def schedule_coding_repair(root: Path, jobs: Any, job: Any, project: Any,
     if active is not None:
         CodexRuntimeStore(root, project.id).queue_input(prompt)
     else:
-        recovery = jobs.submit(project.id, project.revision, action="codex_turn", payload={
+        jobs.submit(project.id, project.revision, action="codex_turn", payload={
             "message": prompt, "initial": False, "increment": 1, "max_increments": 1,
             "research_mode": "research", "recovery_mode": "diagnose_and_repair", "repair_of": job.job_id,
             "repair_request_id": origin["id"],
         })
-        launch_research_job(root, recovery)
+        # Never inherit a numerical worker's sandbox when starting Codex.
     return record

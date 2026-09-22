@@ -145,7 +145,7 @@ def check_scientific_plotting(python: Path) -> None:
 def install_dependencies(python: Path) -> None:
     print("\nInstalling Python dependencies ...")
     _pip(python, "install", "--upgrade", "pip", "setuptools", "wheel")
-    _pip(python, "install", "-e", f"{ROOT}[dev]")
+    _pip(python, "install", "-e", str(ROOT))
     # Repair partial or stale Julia bridge installs as well as installing them.
     # A package directory can exist while its compiled extension or metadata is
     # missing, in which case a normal dependency check incorrectly skips it.

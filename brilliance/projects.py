@@ -20,7 +20,7 @@ from typing import Any, Mapping
 from .artifacts import canonical_json, content_hash, json_safe
 
 PROJECT_SCHEMA_VERSION = "3.0"
-MANIFEST_LIVE_ROOTS = {"codex", "conversation", "jobs", "workspace"}
+MANIFEST_LIVE_ROOTS = {"codex", "conversation", "jobs", "workspace", "chat_checkpoints"}
 
 # Labels are retained only so historical evidence remains readable in the UI.
 # They are not a capability menu and do not select research workflows.
@@ -470,15 +470,10 @@ def _write_once(path: Path, payload: Any) -> None:
 
 def _manifest_artifact_paths(directory: Path) -> list[Path]:
     paths: list[Path] = []
-    for path in sorted(directory.rglob("*")):
-        if not path.is_file():
+    for root in sorted(directory.iterdir()):
+        if not root.is_dir() or root.name == "manifests" or root.name in MANIFEST_LIVE_ROOTS:
             continue
-        parts = path.relative_to(directory).parts
-        if not parts or parts[0] == "manifests" or parts[0] in MANIFEST_LIVE_ROOTS:
-            continue
-        if len(parts) == 1:
-            continue
-        paths.append(path)
+        paths.extend(path for path in sorted(root.rglob("*")) if path.is_file())
     return paths
 
 

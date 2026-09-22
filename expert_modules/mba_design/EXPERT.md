@@ -1,72 +1,50 @@
 ---
 id: laboratory.mba_design
-title: MBA design physics and numerical diagnostics
-summary: Practical MBA initialization and diagnosis for model-authored JuTrack experiments; independent physical evidence checks.
+title: MBA physics references and measurements
+summary: Concise MBA design knowledge and optional JuTrack-backed diagnostics; no prescribed design controller.
 domains: [mba, lattice design, electron storage rings, synchrotron light sources]
 authors: [Brilliance project team (draft maintainer)]
-tags: [mba, 5ba, 6ba, 7ba, 9ba, tme, modified-tme, hybrid-mba, matching, radiation, optimization, jutrack]
-version: 2.3.0
+tags: [mba, 5ba, 6ba, 7ba, 9ba, tme, modified-tme, hybrid-mba, emittance, chromatic, sextupole, matching, radiation, optimization, jutrack]
+version: 3.1.0
 status: draft
 knowledge_status: draft
 kind: method
 enabled: true
 ---
 
-# MBA design: reason, write, calculate, check
+# MBA research knowledge
 
-The scientist gives requirements; the agent defines candidate structures,
-knobs, residuals, objectives and experiments. Use the core `LatticeExperiment`
-and `CandidateLedger` for dependent calculations, exact candidate retention and
-feasibility-first selection instead of rewriting these in each stage.
-Brilliance supplies JuTrack, element editing, unit scans, matching, PSO/MOPSO,
-plots and exact-state evidence.
+Use physics to choose an experiment, then write project-local code using the
+configured JuTrack runtime and general numerical tools. This module supplies
+references and measurements, not a mandatory sequence, installed lattice or
+automatic design certificate. Other accelerator topics belong in other modules.
 
-| Task | Read | Purpose |
-| --- | --- | --- |
-| New conventional MBA | [Conventional physics](references/conventional_api.md) | Fresh TME/M-TME unit, complete-cell repetition, outer-two-unit matching |
-| Hybrid MBA construction/conversion | [Physical outcome checks](references/hmba_outcome_api.md) | Independently measured shape and machine requirements, no prescribed solver |
-| Analytical scales | [Physics reference](references/physics_reference_api.md) | Individual-bend TME conditions and geometry-weighted reference |
+Read only what the current question needs:
 
-For a greenfield conventional MBA, repeat the measured unit into the complete
-MBA, then rematch the first two units and their globally mirrored last two units.
-Use `optimize_tme_unit_geometry` to search
-unit lengths and strengths jointly; `design_tme_unit` is a fixed-geometry
-diagnostic, not the normal design default. `assemble_mba_outer_units` accounts
-for geometry and bend closure; `mba_outer_unit_knobs` declares ownership;
-`match_mba_outer_units` measures the complete periodic cell through JuTrack.
-Do not invent short terminal lines or freeze incoming unit optics and seed tunes.
-A seven-bend layout plus stability search is not an equivalent low-emittance
-initialization. An alternative requires an explicit scientist request/approval
-or a documented, evidence-backed branch; "prototype" is not a reason to skip
-the physical initialization. Do not demand exact TME equality or fixed tunes.
+| Question | Reference |
+| --- | --- |
+| How should radiation, chromatic optics and nonlinear acceptance be designed together? | [Design decisions and measurements](references/hmba_outcome_api.md) |
+| How can I initialize and match a conventional MBA? | [Optional TME-derived recipe](references/conventional_api.md) |
+| What is the appropriate TME normalization? | [Analytical references](references/physics_reference_api.md) |
 
-Test optional-element removal by native rematching; preserve requirements and
-retain the parent when removal fails.
+The complete periodic cell and its explicit ring determine the result. An
+isolated TME unit, stable map, optimizer exit flag or lattice label alone does
+not establish that a requested design works. Use JuTrack for simulated optics,
+radiation and tracking; analytical expressions are checks and initialization aids.
 
-For follow-up work, continue the exact current-project candidate. Put research
-code in the project; installed functions must be reusable numerical operations.
+Keep user requirements separate from design choices and aspirations. State
+material assumptions, but do not invent universal magnet limits, tune targets,
+search budgets, emittance ceilings or approval gates. The model may choose and
+revise a route, geometry, solver or objective using measured evidence.
 
-## Physics and evidence boundaries
+Co-design radiation, sextupole sites and nonlinear acceptance; retain competing
+matched candidates. There is no preferred bend count: honor requested topology,
+otherwise compare alternatives. Papers supply hypotheses, not facility templates
+or tune targets. Consult the design decisions reference for trade-offs; the TME
+recipe is optional.
 
-- The complete periodic cell is the design authority. TME is an initialization
-  reference; a good unit does not prove a good complete MBA.
-- Separate machine requirements, proposed geometry/search allocations and soft
-  aspirations. Preserve declared circumference, straight length, angle sum and
-  energy-dependent magnet limits. Use exact saved numbers, never rounded tables.
-  Declare magnet length ranges before searching; see conventional physics.
-- Count bends and mirror partners by physical order, not inherited unit names.
-  For the outer-pair hybrid hypothesis both SF_L and SD_L belong in B1–B2;
-  their partners belong in B(M−1)–BM, not the suppressor regions. Specify actual
-  finite intervals and test the requested shape; a lattice label is not evidence.
-- Stable optics, geometry/field bounds, the declared achromat and positive damping
-  govern feasibility. Emittance, chromatic burden and nonlinear acceptance are
-  distinct results. Do not freeze seed tunes or core optics without a requirement.
-- Use measured per-bend radiation and matching residuals to choose the next change.
-  A failed local match or short search does not establish rank deficiency,
-  convergence or physical impossibility.
-- Publish the exact evaluated candidate, interpretable tables and one-cell combined
-  lattice/optics plot. Distinguish calculation validity from satisfying the request.
-
-Current expertise covers positive homogeneous bends, without bend gradients,
-reverse bends or LGBs. Never import another project's results or facility
-strengths as a fresh seed.
+Use exact current-project candidates for follow-ups and keep trial branches
+distinct from the working lattice. Save numerical results before optional
+reporting. Present a short physical interpretation, the relevant measurements
+and a combined one-cell lattice/optics plot when useful. Report failures as
+observations, not proofs of physical impossibility.

@@ -33,7 +33,7 @@ from .projects import ResearchProject
 from .research_environment import ResearchEnvironment, ResearchEnvironmentError
 
 CODEX_RUNTIME_SCHEMA_VERSION = "2.0"
-ACCELERATOR_AGENT_PROFILE_VERSION = "11.0"
+ACCELERATOR_AGENT_PROFILE_VERSION = "12.2"
 TURN_SHUTDOWN_RESERVE_SECONDS = 10.0
 RESEARCH_STATUS_PATTERN = re.compile(
     r"\s*<!--\s*brilliance-research-status:\s*"
@@ -54,68 +54,21 @@ def _safe_int(value: Any, default: int) -> int:
 
 
 def configured_max_increments() -> int:
-    try:
-        default = ResearchEnvironment.load().max_autonomous_increments
-    except ResearchEnvironmentError:
-        default = 1
-    return max(
-        1,
-        min(20, _safe_int(os.environ.get("BRILLIANCE_RESEARCH_MAX_INCREMENTS"), default)),
-    )
+    return ResearchEnvironment.load().max_autonomous_increments
 
 
 def configured_turn_timeout(environment: ResearchEnvironment) -> int:
-    legacy = max(
-        30,
-        _safe_int(os.environ.get("BRILLIANCE_CODEX_TURN_TIMEOUT"), environment.turn_wall_time_s),
-    )
-    return max(30, _safe_int(os.environ.get("BRILLIANCE_CODEX_INCREMENT_TIMEOUT"), legacy))
+    return environment.turn_wall_time_s
 
 
 def configured_auto_continue() -> bool:
-    configured = os.environ.get("BRILLIANCE_RESEARCH_AUTO_CONTINUE")
-    if configured is not None:
-        return configured.strip().lower() in {"1", "true", "yes", "on"}
-    try:
-        return ResearchEnvironment.load().auto_continue
-    except ResearchEnvironmentError:
-        return False
+    return ResearchEnvironment.load().auto_continue
 
 
 def configured_max_consecutive_timeouts() -> int:
-    return max(
-        1,
-        min(4, _safe_int(os.environ.get("BRILLIANCE_MAX_CONSECUTIVE_TIMEOUTS", "2"), 2)),
-    )
+    return ResearchEnvironment.load().max_consecutive_timeouts
 
 
-def configured_first_execution_nudge() -> int:
-    """Seconds of model-only work allowed before requesting an executable milestone."""
-
-    return max(
-        60,
-        min(900, _safe_int(os.environ.get("BRILLIANCE_FIRST_EXECUTION_NUDGE_S", "120"), 120)),
-    )
-
-
-def configured_second_execution_nudge() -> int:
-    """Absolute turn age for the stronger no-result execution reminder."""
-
-    first = configured_first_execution_nudge()
-    return max(
-        first + 60,
-        min(1_200, _safe_int(os.environ.get("BRILLIANCE_SECOND_EXECUTION_NUDGE_S", "300"), 300)),
-    )
-
-
-def configured_max_pre_execution() -> int:
-    """Maximum model-owned preparation time before a numerical program starts."""
-
-    second = configured_second_execution_nudge()
-    return max(
-        second + 60,
-        min(1_200, _safe_int(os.environ.get("BRILLIANCE_MAX_PRE_EXECUTION_S", "180"), 180)),
-    )
 
 
 def configured_chat_update_interval() -> int:
@@ -200,6 +153,9 @@ def research_progress(state: Mapping[str, Any]) -> dict[str, Any]:
         "milestones": milestones,
         "latest_results": findings,
         "latest_errors": errors,
+        "source_notices": [{"title": str(item.get("title", "Web source")),
+                            "summary": str(item.get("summary") or item.get("detail", ""))}
+                           for item in activities if status(item) == "unavailable"][-2:],
         "narrative": str(
             state.get("live_narrative") or state.get("partial_response") or ""
         )[-1_000:],
@@ -288,6 +244,7 @@ class CodexRuntimeStore:
             "status": str(activity.get("status", "running")),
             "detail": str(activity.get("detail", ""))[:2_000],
             "summary": str(activity.get("summary", ""))[:500],
+            "source_url": str(activity.get("source_url", "")),
             "timestamp": str(activity.get("timestamp", _now())),
         }
         index = next(
@@ -298,7 +255,12 @@ class CodexRuntimeStore:
             activities.append(normalized)
         else:
             activities[index] = normalized
-        return self.update(activities=activities[-40:], label=_stage_title(normalized))
+        sources = list(state.get("source_activities", []))
+        if (normalized["kind"] in {"search", "source"} or normalized["source_url"]
+                or normalized["title"].startswith(("Searching the web:", "Reading a web source:"))):
+            sources = [s for s in sources if s.get("id") != normalized["id"]]
+            sources.append(normalized)
+        return self.update(activities=activities[-40:], source_activities=sources[-60:], label=_stage_title(normalized))
 
     def append_event(self, event: Mapping[str, Any]) -> Path:
         payload = {
@@ -677,43 +639,13 @@ def run_codex_turn(
     )
 
 
-_PROGRAM_ACTION = re.compile(
-    r"\b(design|build|construct|create|calculate|compute|evaluate|simulate|track|"
-    r"optimi[sz]e|match|plot|insert|remove|modify|change|correct)\w*\b",
-    re.IGNORECASE,
-)
-_PROGRAM_CONTINUATION = re.compile(
-    r"^\s*(continue|resume|proceed|keep going|go on)(?:\s+(?:the )?(?:research|work|calculation|design))?[.!]?\s*$",
-    re.IGNORECASE,
-)
-_NUMERICAL_EVIDENCE_REQUEST = re.compile(
-    r"\b(current|show|give|list|report|value|values|plot|table|calculate|compute)\b.*"
-    r"\b(lattice|elements?|optics?|emittance|chromaticity|tune|trajectory|phase[ -]?space|"
-    r"dynamic aperture|momentum aperture|radiation|tracking|twiss|dispersion|beta)\b",
-    re.IGNORECASE,
-)
-
-
 def _native_research_stage_requested(
     message: str, *, initial: bool, research_mode: str
 ) -> bool:
     """Keep every supported research chat in one coherent native agent."""
 
     del message, initial
-    return research_mode in {"research", "result_review"}
-
-
-def _native_execution_required(message: str, *, initial: bool) -> bool:
-    """Require new evidence for calculations while allowing conceptual discussion."""
-
-    return bool(
-        _PROGRAM_ACTION.search(message)
-        or _PROGRAM_CONTINUATION.match(message)
-        or _NUMERICAL_EVIDENCE_REQUEST.search(message)
-        or _requires_jutrack_execution(
-            message, initial=initial, research_mode="research"
-        )
-    )
+    return research_mode in {"research", "result_review", "reference_acquisition"}
 
 
 def _saved_project_state_context(project_directory: Path) -> str:
@@ -810,8 +742,7 @@ def _lookup_committed_program_receipt(project_directory: Path, run_id: str) -> d
                 continue
             receipt = _compact_execution(_compact_expert_execution(execution))
             identity = str(receipt.get("run_id") or "")
-            if (not identity or identity in seen or receipt.get("execution_valid") is not True
-                    or receipt.get("scientific_passed") is not True or receipt.get("status") != "completed"):
+            if not identity or identity in seen:
                 continue
             seen.add(identity)
             receipt["execution_artifact"] = str(path)
@@ -825,7 +756,7 @@ def _lookup_committed_program_receipt(project_directory: Path, run_id: str) -> d
         except (OSError, ValueError, TypeError, AttributeError, KeyError):
             continue
     return {"receipt": selected, "eligible_runs": eligible,
-            "error": "" if selected or not run_id else "No committed successful execution with a verified source matches that run_id in this project."}
+            "error": "" if selected or not run_id else "No committed execution with a verified source matches that run_id in this project."}
 
 
 async def _run_provider_native_stage(
@@ -914,11 +845,16 @@ async def _run_provider_native_stage(
             completion_origin = scientist_request(root, project.id)
             store.update(label="Incorporating your latest message", live_narrative="The new request has reached the active model loop.")
         elif kind in {"tool_started", "tool_finished"}:
+            tool_name = str(event.get("name", "tool"))
+            web_action = {"search_web": "Searching the web", "read_web_page": "Reading a web source"}.get(tool_name)
+            detail = str(event.get("detail", ""))
             store.append_activity({
-                "id": event.get("id"), "kind": "research_tool",
-                "title": str(event.get("name", "tool")),
-                "status": "running" if kind == "tool_started" else "completed" if event.get("ok") else "failed",
-                "detail": str(event.get("error", "")), "summary": str(event.get("error", "")),
+                "id": event.get("id"), "kind": "search" if web_action else "research_tool",
+                "title": (web_action + (": " + detail if detail else "")) if web_action else tool_name,
+                "status": ("running" if kind == "tool_started" else "completed" if event.get("ok")
+                           else "unavailable" if web_action and event.get("source_unavailable") else "failed"),
+                "detail": str(event.get("error") or detail), "summary": str(event.get("error", "")),
+                "source_url": event.get("source_url", ""),
             })
         elif kind == "user_update":
             update_kind = str(event.get("update_kind", "progress"))
@@ -928,10 +864,11 @@ async def _run_provider_native_stage(
                 str(event.get("message", "")),
                 meta={"runtime": "native_research_agent", "kind": update_kind},
             )
-            store.update(
-                label=str(event.get("message", ""))[:120] or "Research update",
-                live_narrative=str(event.get("message", "")),
-            )
+            if update_kind != "activity":
+                store.update(
+                    label=str(event.get("message", ""))[:120] or "Research update",
+                    live_narrative=str(event.get("message", "")),
+                )
         elif kind in {"program_written", "program_patched"}:
             passed = event.get("passed") is True
             store.update(
@@ -941,12 +878,11 @@ async def _run_provider_native_stage(
                     if passed
                     else "Correcting saved program preflight"
                 ),
-                live_narrative=(
-                    f"{event.get('program')} — {event.get('lines', '?')} lines"
-                    if passed
-                    else "; ".join(str(item) for item in event.get("issues", []))[:1000]
-                ),
             )
+            store.append_activity({"kind": "preflight", "title": "Program preflight",
+                                   "status": "completed" if passed else "failed",
+                                   "detail": json.dumps(dict(event), ensure_ascii=False),
+                                   "summary": "; ".join(str(item) for item in event.get("issues", []))})
         elif kind == "run_started":
             text = (
                 f"**Execution {event.get('attempt')}** — "
@@ -971,7 +907,9 @@ async def _run_provider_native_stage(
             )
         elif kind == "run_failed":
             error = str(event.get("error", ""))
-            store.update(label="Revising from the execution error", live_narrative=error[:1000])
+            store.update(label="Reviewing an execution issue", live_narrative="Execution diagnostics are available under Technical details.")
+            store.append_activity({"kind": "execution", "title": "Execution issue",
+                                   "status": "failed", "detail": error, "summary": error[:500]})
         elif kind == "run_completed":
             receipt = event.get("receipt", {})
             receipt = receipt if isinstance(receipt, Mapping) else {}
@@ -1000,7 +938,6 @@ async def _run_provider_native_stage(
             prior_receipt=(_latest_committed_program_receipt(project_directory)
                            if research_mode == "result_review" else None),
             receipt_lookup=lambda run_id: _lookup_committed_program_receipt(project_directory, run_id),
-            require_execution=(research_mode != "result_review" and _native_execution_required(message, initial=initial)),
             on_event=publish,
             conversation_history=history,
             consume_input=store.consume_pending,
@@ -1043,6 +980,7 @@ async def _run_provider_native_stage(
     conversation.append_message(project.id, "assistant", response, attachments=attachments,
         meta={"runtime": "native_research_agent", "kind": "result",
               "request_satisfied": result.request_satisfied,
+              "conversation_completed": result.conversation_completed,
               "scientist_request": completion_origin,
               "completion_evidence": completion_evidence,
               "protocol_failure": ({key: protocol_failure[key] for key in
@@ -1055,7 +993,7 @@ async def _run_provider_native_stage(
         recovery = {"script": result.failed_program, "error": result.last_error,
                     "diagnostic": str(failure), "mode": "diagnose_and_repair"}
         _write_generated_text(failure, json.dumps({"kind": "native_step_boundary", **recovery}, ensure_ascii=False))
-    status = ("complete" if result.request_satisfied or result.managed_job_id
+    status = ("complete" if result.conversation_completed or result.request_satisfied or result.managed_job_id
               else "checkpoint" if result.continuation_needed or recovery else "paused")
     store.update(
         status=status,
@@ -1064,8 +1002,8 @@ async def _run_provider_native_stage(
         label=(
             "Long calculation is running independently"
             if result.managed_job_id
-            else "JuTrack result is ready"
-            if result.request_satisfied
+            else "Response is ready"
+            if result.conversation_completed or result.request_satisfied
             else "Research context checkpoint saved"
             if result.continuation_needed
             else "Model response needs attention; research is unfinished"
@@ -1097,7 +1035,7 @@ async def _run_provider_native_stage(
         thread_id=None,
         turn_id=f"native-agent-{content_hash((project.id, completed_at), length=16)}",
         final_response=response,
-        disposition="complete" if completion_evidence else "native_repair" if recovery else "native_continue" if result.continuation_needed else "needs_input",
+        disposition="complete" if result.conversation_completed or result.request_satisfied or result.managed_job_id else "native_repair" if recovery else "native_continue" if result.continuation_needed else "needs_input",
         recovery=recovery,
         completion_evidence=completion_evidence,
     )
@@ -1167,17 +1105,11 @@ async def _run_codex_turn(
     # gateways do not necessarily host the reviewer model, so keep their ordinary
     # command policy non-interactive and pre-approve only Brilliance's confined
     # workspace writer in its MCP configuration below.
-    approval = ApprovalMode.auto_review if backend.key == "openai" else ApprovalMode.deny_all
+    approval = ApprovalMode.auto_review if backend.key in {"openai", "chatgpt"} else ApprovalMode.deny_all
     sandbox = Sandbox.full_access if environment.codex_sandbox == "full-access" else Sandbox.workspace_write
     aliases = environment.prepare_sandbox_runtime_aliases(project_directory / "workspace")
     timeout = configured_turn_timeout(environment)
     process_environment = environment.process_environment()
-    from .experts import ExpertRegistry
-    from .scientific_acceptance import ACCEPTANCE_ENVIRONMENT, continued_request_acceptance
-
-    process_environment[ACCEPTANCE_ENVIRONMENT] = json.dumps(list(continued_request_acceptance(
-        message, ResearchConversationStore(root).messages(project.id),
-        registry=ExpertRegistry.from_environment(environment, project_directory=project_directory))))
     matplotlib = project_directory / "workspace" / "runtime" / "matplotlib"
     matplotlib.mkdir(parents=True, exist_ok=True)
     julia_executable = aliases.get("julia_executable", environment.julia_executable)
@@ -1204,6 +1136,9 @@ async def _run_codex_turn(
         process_environment["PYTHON_JULIAPKG_PROJECT"] = str(aliases["python_julia_environment"])
         process_environment["PYTHON_JULIACALL_PROJECT"] = str(aliases["python_julia_environment"])
 
+    if backend.key == "chatgpt":
+        from .codex_account import subscription_environment
+        process_environment = subscription_environment(process_environment)
     config = CodexConfig(
         config_overrides=(
             *backend.config_overrides,
@@ -1230,6 +1165,17 @@ async def _run_codex_turn(
     handle = None
     try:
         await codex.__aenter__()
+        if backend.key == "chatgpt":
+            from .codex_account import require_subscription
+            await require_subscription(codex)
+        discovered_model = backend.model
+        if backend.key == "chatgpt" and not discovered_model:
+            catalog = (await codex.models()).model_dump(by_alias=True, mode="json")
+            selected = next((m for m in catalog.get("data", []) if m.get("isDefault") and not m.get("hidden")), None)
+            if not selected:
+                raise ValueError("Codex did not report a default model. Select an available model in Models & account.")
+            discovered_model = selected["model"]
+            store.update(backend={**backend.public(), "model": discovered_model})
         thread_id = _compatible_thread_id(
             previous,
             previous_backend_fingerprint=previous_backend,
@@ -1246,6 +1192,8 @@ async def _run_codex_turn(
             "developer_instructions": instructions,
             "sandbox": sandbox,
         }
+        if backend.key == "chatgpt":
+            thread_kwargs["model"] = discovered_model
         if thread_id and not _context_rollover_required(previous):
             try:
                 thread = await codex.thread_resume(thread_id, **thread_kwargs)
@@ -1295,20 +1243,9 @@ async def _run_codex_turn(
             )
         if completed is None:
             raise RuntimeError("Codex stream ended without a completed turn")
+        _check_completed_turn(completed)
         response = _final_response(completed) or "".join(streamed).strip()
         response, disposition = _response_disposition(response)
-        if (
-            _requires_jutrack_execution(
-                message, initial=initial, research_mode=research_mode
-            )
-            and not store.load().get("research_program_started_at")
-        ):
-            response = (
-                "This design turn ended before any saved JuTrack program was executed. "
-                "No lattice, optics, or emittance claim was accepted. The controller treats "
-                "this as an incomplete model turn, not as a design result."
-            )
-            disposition = "needs_input"
         if disposition == "continue" and not configured_auto_continue():
             disposition = "needs_input"
             response = (
@@ -1318,10 +1255,9 @@ async def _run_codex_turn(
             )
         attachments = _turn_attachments(root, project.id, started_at)
         if not response.strip():
-            response = _presentable_result_narrative(attachments) or (
-                "The model turn ended without a user-facing scientific explanation. No result "
-                "has been accepted; inspect the live checkpoint before continuing."
-            )
+            response = _presentable_result_narrative(attachments)
+            if not response:
+                raise CodexProviderTurnError("empty_response", "The model returned no explanation. Retry from the saved checkpoint; no calculation needs to be repeated just for reporting.")
         response = _with_artifact_notice(response, attachments)
         ResearchConversationStore(root).append_message(
             project.id, "assistant", response, attachments=attachments
@@ -1523,112 +1459,10 @@ async def _consume_turn_stream(
                     }
                 )
 
-    async def execution_watchdog() -> None:
-        """Redirect model-only wandering while leaving submitted calculations alone."""
-
-        nonlocal control
-
-        steer_call = getattr(handle, "steer", None)
-        # Tiny unit-test and interactive turns do not need a research watchdog.
-        if not callable(steer_call) or timeout_seconds < 120:
-            return
-        schedule = (
-            (
-                float(configured_first_execution_nudge()),
-                "Execution milestone: stop expanding the plan and do not reread documentation or "
-                "inspect another project. Save and execute the smallest complete implementation "
-                "of the already-selected expert route. 'Smallest' never permits dropping a "
-                "required seed hypothesis, comparison, gate, or diagnostic from that route. It "
-                "may publish a feasible seed or valid negative evidence; it does not need to "
-                "solve the entire research problem in one run.",
-                "Refocusing on the first executable scientific result",
-            ),
-            (
-                float(configured_second_execution_nudge()),
-                "No Brilliance research program has been executed yet. Stop adding architecture "
-                "and avoid copying historical code. Complete and run the current expert route's "
-                "first valid milestone now, including run.finish with a clear result or failure "
-                "diagnosis. Preserve every mandatory route comparison and physics gate; defer "
-                "only work that the selected method explicitly labels optional.",
-                "Requiring a runnable result before more model planning",
-            ),
-        )
-        elapsed = 0.0
-        for due, message, title in schedule:
-            wait_for = due - elapsed
-            if wait_for > 0:
-                await asyncio.sleep(wait_for)
-            elapsed = due
-            if stream_state.get("research_program_started"):
-                return
-            if store.load().get("status") not in {"starting", "running"}:
-                return
-            try:
-                await steer_call(message)
-            except Exception:
-                return
-            store.append_activity(
-                {
-                    "id": "execution-watchdog-" + content_hash((due, message), length=12),
-                    "kind": "decision",
-                    "title": title,
-                    "status": "completed",
-                    "summary": message,
-                }
-            )
-            store.update(
-                label=title,
-                live_narrative=(
-                    "The research controller redirected model-only work toward a saved, "
-                    "executable numerical milestone."
-                ),
-            )
-        deadline = float(configured_max_pre_execution())
-        remaining = deadline - elapsed
-        if remaining > 0:
-            await asyncio.sleep(remaining)
-        if stream_state.get("research_program_started"):
-            return
-        if store.load().get("status") not in {"starting", "running"}:
-            return
-        record = {
-            "kind": "pre_execution_stall",
-            "fatal": True,
-            "repairable": False,
-            "detail": (
-                f"The model used {int(deadline)} seconds without starting a saved JuTrack "
-                "research program. The controller stopped model-only preparation; no numerical "
-                "claim or lattice state changed."
-            ),
-        }
-        control = record
-        stream_state["operational_abort"] = record
-        store.append_activity(
-            {
-                "id": "pre-execution-stall-" + content_hash(deadline, length=12),
-                "kind": "error",
-                "title": "Stopped model-only preparation before it consumed the full turn",
-                "status": "failed",
-                "summary": record["detail"],
-            }
-        )
-        interrupt = getattr(handle, "interrupt", None)
-        if callable(interrupt):
-            with suppress(Exception):
-                await interrupt()
-        # Some third-party providers do not acknowledge an interrupt until a
-        # long reasoning response ends. Before a program starts there is no
-        # JuTrack child to preserve, so close only the model transport instead
-        # of allowing hidden preparation to consume the whole turn budget.
-        await asyncio.sleep(2.0)
-        if not stream_state.get("research_program_started"):
-            with suppress(Exception):
-                await close_codex()
 
     stream_task = asyncio.create_task(consume())
     heartbeat_task = asyncio.create_task(heartbeat())
     steering_task = asyncio.create_task(steer())
-    watchdog_task = asyncio.create_task(execution_watchdog())
     try:
         done, _ = await asyncio.wait({stream_task}, timeout=timeout_seconds)
         if stream_task not in done:
@@ -1641,7 +1475,7 @@ async def _consume_turn_stream(
         await stream_task
         return completed, streamed, control
     finally:
-        tasks = (stream_task, heartbeat_task, steering_task, watchdog_task)
+        tasks = (stream_task, heartbeat_task, steering_task)
         for task in tasks:
             if not task.done():
                 task.cancel()
@@ -1919,11 +1753,25 @@ def _activity_from_item(item: Mapping[str, Any], *, status: str) -> dict[str, An
     if kind == "fileChange":
         return {"id": item_id, "kind": "code", "title": "Saving research code", "status": status}
     if kind == "webSearch":
+        action = item.get("action") or {}
+        searching = action.get("type") == "search" or bool(item.get("query"))
+        query = item.get("query") or "; ".join(action.get("queries") or [])
+        results = [r for r in item.get("results") or [] if isinstance(r, Mapping)]
+        lines = []
+        blocked = 0
+        for row in results[:10]:
+            title = str(row.get("title", ""))
+            denied = any(term in title.lower() for term in ("not a bot", "access denied", "captcha", "just a moment"))
+            blocked += int(denied)
+            label = "Blocked — no paper content" if denied else "Discovered link" if searching else "Opened source — content not independently verified"
+            lines.append(f"{label}: {title} — {row.get('url', '')}")
         return {
             "id": item_id,
             "kind": "search",
-            "title": "Searching: " + str(item.get("query", ""))[:180],
-            "status": status,
+            "title": ("Searching: " + str(query)[:160]) if searching else "Reading web sources",
+            "status": "unavailable" if blocked and blocked == len(results) else status,
+            "detail": "\n".join(lines) or "Waiting for source results; no paper content confirmed.",
+            "summary": f"{len(results)} source entries; {blocked} blocked. Search snippets are not full-paper evidence.",
         }
     if kind == "contextCompaction":
         return {"id": item_id, "kind": "context", "title": "Compacting research context", "status": status}
@@ -2368,14 +2216,7 @@ def _program_checkpoint_narrative(
     except (OSError, UnicodeError):
         source = ""
     lines = len(source.splitlines())
-    complete = bool(re.search(r"\brun\.finish\s*\(", source))
     description = f"`workspace/programs/{program.name}` ({lines} lines)"
-    if not complete:
-        return (
-            f"The model saved only an unfinished program draft, {description}; it has no "
-            "`run.finish(...)` result publication and was not accepted as scientific evidence. "
-            "No JuTrack result, table, or plot exists for this turn."
-        )
     if not started:
         return (
             f"The model saved {description}, but never invoked the registered research-program "
@@ -2385,6 +2226,22 @@ def _program_checkpoint_narrative(
         f"The saved program {description} was launched but did not publish a typed result before "
         "the boundary. Its partial files are preserved, but no numerical claim was accepted."
     )
+
+
+class CodexProviderTurnError(RuntimeError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _check_completed_turn(completed):
+    completed = completed.get("turn", completed)
+    status = str(completed.get("status", ""))
+    if status in {"failed", "interrupted"}:
+        error = completed.get("error") or {}
+        code = error.get("codexErrorInfo") or status
+        message = error.get("message") or f"Model turn {status}."
+        raise CodexProviderTurnError(str(code), str(message))
 
 
 def _pause_turn(
@@ -2400,6 +2257,17 @@ def _pause_turn(
     store = CodexRuntimeStore(root, project.id)
     state = store.load()
     concise_detail = _pause_failure_detail(detail, exc, state)
+    transport_failure = type(exc).__name__ == "TransportClosedError" or "process closed stdout" in detail
+    diagnostic = None
+    if transport_failure:
+        from .atomic_io import atomic_write_text
+        diagnostic = root / project.id / "codex" / "runtime_failures" / f"transport-{time.time_ns()}.json"
+        try:
+            atomic_write_text(diagnostic, json.dumps({"timestamp": _now(), "exception_type": type(exc).__name__,
+                "detail": _redacted_transport_detail(detail), "thread_id": getattr(thread, "id", None),
+                "turn_id": getattr(handle, "id", None)}, ensure_ascii=False, indent=2))
+        except OSError:
+            diagnostic = None  # Still publish the pause if the optional diagnostic cannot be saved.
     message = (
         "The research turn stopped at its operational boundary: "
         + concise_detail
@@ -2408,6 +2276,13 @@ def _pause_turn(
     ResearchConversationStore(root).append_message(project.id, "assistant", message)
     store.update(
         status="paused",
+        protocol_failure=({"type": "provider_turn_failure", "reason": exc.code,
+                           "message": concise_detail, "can_retry": True}
+                          if isinstance(exc, CodexProviderTurnError) else
+                          {"type": "provider_turn_failure", "reason": "codex_transport_closed",
+                           "message": concise_detail, "can_retry": True,
+                           "diagnostic": str(diagnostic.relative_to(root / project.id)) if diagnostic else None}
+                          if transport_failure else state.get("protocol_failure")),
         thread_id=getattr(thread, "id", None) or store.load().get("thread_id"),
         turn_id=getattr(handle, "id", None) or store.load().get("turn_id"),
         partial_response="",
@@ -2415,6 +2290,15 @@ def _pause_turn(
         error=f"{type(exc).__name__}: {concise_detail}",
     )
     return CodexTurnOutcome(status="paused", detail=message, final_response=message, disposition="needs_input")
+
+
+def _redacted_transport_detail(detail: str) -> str:
+    text = str(detail)
+    for name, value in os.environ.items():
+        if len(value) >= 8 and any(word in name.upper() for word in ("KEY", "TOKEN", "SECRET", "PASSWORD")):
+            text = text.replace(value, "[redacted]")
+    text = re.sub(r"(?i)Bearer\s+[^\s\"']+", "Bearer [redacted]", text)
+    return text[-8000:]
 
 
 def _pause_failure_detail(
@@ -2426,6 +2310,13 @@ def _pause_failure_detail(
 
     if type(exc).__name__ != "TransportClosedError" and "process closed stdout" not in detail:
         return _concise_narrative(detail, limit=700)
+    if "could not find home directory" in detail.lower():
+        return ("Codex could not start: Could not find home directory. "
+                "This is a process-environment failure, not a rejected calculation. "
+                "Model follow-ups must be launched by the application supervisor, not a sandboxed numerical worker.")
+    if "stderr_tail=" in detail and detail.split("stderr_tail=", 1)[1].strip():
+        return "Codex transport closed. Runtime diagnostic: " + _concise_narrative(
+            _redacted_transport_detail(detail.split("stderr_tail=", 1)[1]), limit=600)
     activities = state.get("activities", [])
     failures = [
         item
@@ -2686,6 +2577,8 @@ def _turn_attachments(
                     "type": "evidence_summary",
                     "title": str(value.get("title") or "Scientific result"),
                     "summary": value.get("summary", ""),
+                    "program_stdout": (str(data.get("stdout", ""))[-20000:]
+                                       if data.get("publication") == "automatic_execution_output" else ""),
                     "steps": value.get("methods", []),
                     "tables": rendered_tables,
                     "limitations": value.get("limitations", []),
@@ -2881,7 +2774,7 @@ def _developer_instructions(
     research_mode: str = "research",
     query: str = "",
 ) -> str:
-    from .coding_policy import SCIENTIFIC_CODING_POLICY
+    from .coding_policy import SCIENTIFIC_CODING_POLICY, research_network_instructions
     from .experts import ExpertRegistry
 
     command = _project_command(project, project_root, environment)
@@ -2894,67 +2787,39 @@ def _developer_instructions(
         max_chars=environment.expert_max_context_chars,
         max_chunks=4,
     )
-    from .scientific_acceptance import acceptance_instructions, continued_request_acceptance
-
-    required = continued_request_acceptance(
-        query, ResearchConversationStore(project_root).messages(project.id), registry=registry)
-    acceptance = acceptance_instructions(required, registry=registry)
-    network = (
-        "Internet research is enabled; use it only when the request needs external sources."
-        if environment.internet_access
-        else "Internet research is disabled. Do not search, browse, download, or call remote MCP."
-    )
+    network = research_network_instructions(environment.internet_access, web_search_available=True)
     return SCIENTIFIC_CODING_POLICY + f"""
 You are Brilliance, a general accelerator-physics coding agent. The newest scientist
-message is the immediate task. JuTrack is the sole numerical beam-dynamics authority.
+message is the immediate task. Choose the scientific method; expert notes are optional.
 
-Configured runtime (already verified): Python `{environment.python_executable}`; JuTrack
-`{environment.jutrack_root}`; public API `brilliance.accelerator_api`. Never search for runtimes,
-install packages, browse sibling projects, or replace JuTrack with
-hand calculations.
+Configured Python: `{environment.python_executable}`
+Configured JuTrack: `{environment.jutrack_root}`
+Project command: `{command}`
+Use this runtime. Do not inspect other projects or change platform installations.
 
-Inspect the exact saved inputs and focused contracts needed for the requested calculation.
-`workspace/ACCELERATOR_API_REFERENCE.md` documents public helpers;
-`workspace/JUTRACK_API_REFERENCE.md` contains read-only signatures, documentation and static
-return information from the configured Python wrapper, without loading Julia. Read relevant
-sections before writing code; no environment rediscovery is needed.
-Use `brilliance_workspace.write_research_program` to save a short Python experiment under
-`workspace/programs/`, save arguments with `write_research_arguments`, run `{command} check-program
-programs/NAME.py`, then execute the actual small calculation with `accelerator.run_research_program`. Use
-`accelerator.run_long_research_program` only for an hours-or-days job and never poll it. Source must
-use `brilliance.research_api.open_research_run` and `brilliance.accelerator_api`. A first program is
-normally under 250 lines and produces one meaningful JuTrack result, not a schema or environment
-probe. A representative evaluation of the real custom residual/objective is useful evidence.
-If repair is needed, inspect the relevant saved source/API section and repair that layer;
-do not repeat an unchanged failed attempt. Never transport code through PowerShell, stdin,
-base64, or redirection.
+Focused reference files are available in workspace/ACCELERATOR_API_REFERENCE.md and
+workspace/JUTRACK_API_REFERENCE.md. Read relevant signatures and units when needed;
+the native reference is extracted from the configured wrapper without starting Julia.
+Use the public API or api.jutrack() for native operations. NumPy, SciPy and Matplotlib
+are available for project-authored methods; no particular builder or optimizer is required.
 
-The saved program owns task-specific data, matching, optimization, plots, and limitations. Use
-exact conserved length/angle constraints; evaluate one cell in inner loops; never match an
-unspecified tune. A design result must distinguish `scientific_passed`, `design_status`, and
-`aspiration_met`. A feasible but poor seed is not a successful design, and a route is not saturated
-without convergence evidence. For lattice design use `api.save_optics_lattice_plot` for one-cell
-beta/dispersion/lattice evidence. Radiation interpretation requires JuTrack radiation and the
-per-bend consistency gate.
+Save inspectable Python with brilliance_workspace.write_research_program and inputs with
+write_research_arguments. Ordinary Python programs may print results and save files under
+BRILLIANCE_RUN_OUTPUT. open_research_run(), progress and finish are optional publishing helpers. `{command} check-program programs/NAME.py` checks source/API
+usage. Use accelerator.run_research_program for short work or run_long_research_program
+for durable calculations. Do not embed Python source in shell commands. A bounded callback
+check is useful before expensive computation, but no fixed stage order is imposed.
 
-Chat is the research interface. `run.progress` must publish each material numerical milestone with
-clear text and current tables/plots; `run.finish` must explain Result, Evidence, Limitations, and
-Next. Files are secondary reproducibility material. Missing a target is valid negative evidence;
-an API exception is not a scientific result.
-
-Select a fitting installed capability or author a justified method from the physics requirements.
-Treat draft expertise as provisional, preserve pending comparisons and use numerical evidence
-to choose the next change. Historical results from other projects are not permitted design seeds.
-End with exactly one private
-`brilliance-research-status` marker: `complete`, `continue`, or `needs_input`.
+Answer conceptual questions directly. For calculations, return scientific interpretation
+with useful inline tables and figures, not only file links. Publish meaningful measured
+milestones; distinguish the current working candidate from rejected/comparison branches.
+Finish with one private brilliance-research-status marker: complete, continue, or needs_input.
 
 Mode: {research_mode}. {network}
 
-Relevant installed knowledge:
-
+Relevant optional knowledge:
 {knowledge}
 
-{acceptance}
 """
 
 
@@ -2966,11 +2831,9 @@ def _turn_prompt(
     research_mode: str = "research",
 ) -> str:
     prefix = (
-        "Inspect the necessary current-project inputs and focused API/method contract, then "
-        "save a short scientific program with brilliance_workspace.write_research_program. "
-        "Use write_research_arguments, check-program and execution to test the actual calculation "
-        "or callback before a larger run. Reuse an installed method when it fits; otherwise "
-        "write task-specific scientific Python. Do not bootstrap or discover a runtime."
+        "Use the current-project inputs and configured runtime. Answer conceptual questions "
+        "directly; for numerical work choose an appropriate method, write project code and "
+        "compute with JuTrack. Optional expert notes and focused API help are available."
         if initial
         else "Continue from saved code, evidence, and contracts without replaying completed work."
     )
@@ -2982,22 +2845,9 @@ def _turn_prompt(
     )
 
 
-def _requires_jutrack_execution(
-    message: str, *, initial: bool, research_mode: str
-) -> bool:
-    """Gate computational greenfield designs against a text-only completion."""
-
-    if not initial or research_mode != "research":
-        return False
-    from .research_admission import complex_greenfield_request
-
-    return complex_greenfield_request(message)
-
-
 def _workspace_agents_md(
     project: ResearchProject, project_root: Path, environment: ResearchEnvironment
 ) -> str:
-    from .coding_policy import SCIENTIFIC_CODING_POLICY
     command = _project_command(project, project_root, environment)
     return f"""<!-- brilliance-managed: accelerator-agent-v{ACCELERATOR_AGENT_PROFILE_VERSION} -->
 # Brilliance accelerator-research workspace
@@ -3011,10 +2861,8 @@ Configured JuTrack: `{environment.jutrack_root}`
 Public API: `brilliance.accelerator_api`  
 Project command: `{command}`
 
-{SCIENTIFIC_CODING_POLICY}
-
-The runtime is prepared. Read the required local API/method reference and exact current-project
-inputs, then save a bounded program with `brilliance_workspace.write_research_program` and JSON
+The runtime is prepared. Use focused API help when needed and exact current-project
+inputs, then save a program with `brilliance_workspace.write_research_program` and JSON
 arguments with `write_research_arguments`. The generated `workspace/JUTRACK_API_REFERENCE.md`
 describes the configured native wrapper without importing Julia.
 
@@ -3023,8 +2871,9 @@ describes the configured native wrapper without importing Julia.
 {command} run-expert-tool accelerator.run_research_program --arguments-file workspace/programs/run.json
 ```
 
-Programs use `open_research_run()` plus `brilliance.accelerator_api`, publish useful
-`run.progress(...)` messages with tables/plots, and finish with a scientist-readable result. Use
+Programs may use native JuTrack or optional `brilliance.accelerator_api` helpers. Plain
+stdout and files under `BRILLIANCE_RUN_OUTPUT` are archived without `run.finish`.
+`open_research_run()`, `run.progress(...)` and `run.finish(...)` are optional publishing helpers. Use
 the long-program tool for durable optimization. Do not put source in shell commands or treat
 files as the user-facing answer. Exact public API signatures are in
 `workspace/ACCELERATOR_API_REFERENCE.md`; reading them before a new calculation is encouraged.

@@ -297,11 +297,9 @@ discovery and its tools/checks are unavailable. Removing a module has the same c
 existing archived evidence is retained, but replaying its scientific validation requires the
 module. Duplicate acceptance IDs and legacy aliases are configuration errors, not priority rules.
 
-New knowledge and code use the module namespace. SDK aliases, when deliberately
-declared by a module author, resolve only an existing exported primitive; they do
-not restore removed source or promise compatibility for old design controllers.
-The removed MBA controllers have no callable compatibility layer. Brilliance never
-rewrites archived programs automatically when an expert API changes.
+New knowledge and code use the module namespace. SDK aliases resolve existing
+exported primitives. Brilliance does not rewrite archived programs when an expert
+API changes; preserve the module version needed to reproduce an archived study.
 
 ## Packaging and review
 

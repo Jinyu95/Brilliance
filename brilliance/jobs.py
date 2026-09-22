@@ -138,7 +138,7 @@ class ResearchJobStore:
                 jobs.append(job)
         return tuple(sorted(jobs, key=lambda item: item.created_at))
 
-    def active(self, project_id: str, *, action: str | None = None) -> ResearchJob | None:
+    def active(self, project_id: str, *, action: str | None = None, allow_launch: bool = False) -> ResearchJob | None:
         action_group = {action} if action else None
         for item in reversed(self.list(project_id)):
             if item.state not in {
@@ -196,7 +196,7 @@ class ResearchJobStore:
                         ),
                     )
                     continue
-                if not claim.exists() and self._launch_recovery_due(item):
+                if allow_launch and not claim.exists() and (not attempts or self._launch_recovery_due(item)):
                     if len(attempts) < WORKER_MAX_LAUNCH_ATTEMPTS:
                         try:
                             launch_research_job(self.project_root, item)
@@ -233,7 +233,7 @@ class ResearchJobStore:
 
         actions = ("codex_turn", "expert_tool")
         for action in actions:
-            self.active(project_id, action=action)
+            self.active(project_id, action=action, allow_launch=True)
         return self.list(project_id)
 
     def launch_history(self, project_id: str, job_id: str) -> tuple[dict[str, Any], ...]:
@@ -587,14 +587,14 @@ def _run_claimed_research_job(root, project_store, jobs, job) -> ResearchJob:
             }
         if next_payload is not None:
             latest = project_store.load(project.id) or project
-            queued = jobs.submit(
+            jobs.submit(
                 latest.id,
                 latest.revision,
                 action="codex_turn",
                 payload=next_payload,
             )
-            if queued.state is JobState.QUEUED:
-                launch_research_job(root, queued)
+            # The application supervisor launches this from its normal context.
+            # Model/numerical workers may inherit a restricted Windows token.
         return finished
     return jobs.finish(
         job,
@@ -615,22 +615,6 @@ def launch_research_job(root: Path | str, job: ResearchJob) -> int:
     worker_environment = environment.project_process_environment(
         project_directory / "workspace"
     )
-    # A queued calculation may start after the originating model process exits.
-    # Reconstruct claim requirements from its durable original scientist request,
-    # never from whichever unrelated request is currently open in the UI.
-    if job.action == "expert_tool":
-        from .experts import ExpertRegistry
-        from .scientific_acceptance import ACCEPTANCE_ENVIRONMENT, request_acceptance_requirements
-
-        origin = job.payload.get("scientist_request", {})
-        original_request = str(origin.get("content", "")) if isinstance(origin, Mapping) else ""
-        recorded = job.payload.get("scientific_acceptance_requirements")
-        required = (recorded if isinstance(recorded, list) and all(isinstance(name, str) for name in recorded)
-                    else list(request_acceptance_requirements(original_request,
-                        registry=ExpertRegistry.from_environment(environment, project_directory=project_directory))))
-        worker_environment[ACCEPTANCE_ENVIRONMENT] = json.dumps(
-            required
-        )
     log_path = project_directory / "jobs" / job.job_id / "worker.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -702,6 +686,8 @@ def _managed_expert_completion_message(
     if isinstance(data, Mapping) and data and not curated_tables:
         scalar_rows = [(key, value) for key, value in list(data.items())[:24]
                        if not isinstance(value, (Mapping, list, tuple))
+                       and key not in {"stdout", "stderr", "publication", "returncode"}
+                       and (not isinstance(value, str) or (len(value) <= 160 and "\n" not in value))
                        and {"quantity": str(key), "value": value} not in attached_scalar_rows]
         if scalar_rows:
             lines.extend(["", "| Quantity | Value |", "|---|---:|"])

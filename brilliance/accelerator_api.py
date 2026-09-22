@@ -194,16 +194,6 @@ def element(
     }
     if normalized_kind in friendly:
         raise ValueError(f"unsupported element token {kind!r}; use {friendly[normalized_kind]}")
-    if normalized_kind in {"SBEND", "RBEND"}:
-        _require_pure_dipole_fields(
-            name,
-            {
-                **fields,
-                "k1_m2": k1_m2,
-                "k2_m3": k2_m3,
-                "k3_m4": k3_m4,
-            },
-        )
     metadata = {key: value for key, value in fields.items() if value is not None}
     if family:
         metadata["family"] = family
@@ -283,7 +273,6 @@ def sector_bend(
     design_role: str = "primary_bend",
     **fields: Any,
 ) -> dict[str, Any]:
-    _require_pure_dipole_fields(name, fields)
     return element(
         "SBEND",
         name,
@@ -306,7 +295,6 @@ def reverse_bend(
 ) -> dict[str, Any]:
     if angle_rad >= 0.0:
         raise ValueError("reverse_bend angle_rad must be negative")
-    _require_pure_dipole_fields(name, fields)
     return element(
         "RBEND",
         name,
@@ -316,21 +304,6 @@ def reverse_bend(
         design_role=design_role,
         **fields,
     )
-
-
-def _require_pure_dipole_fields(name: str, fields: Mapping[str, Any]) -> None:
-    for key in ("k1", "k1_m2", "k2", "k2_m3", "k3", "k3_m4"):
-        value = fields.get(key)
-        if value is not None and abs(float(value)) > 1.0e-15:
-            raise ValueError(f"{name} must be a pure dipole; {key} must be zero")
-    for key in ("PolynomA", "polynom_a"):
-        values = fields.get(key)
-        if values is not None and any(abs(float(value)) > 1.0e-15 for value in values):
-            raise ValueError(f"{name} must be a pure dipole; {key} must be zero")
-    for key in ("PolynomB", "polynom_b"):
-        values = fields.get(key)
-        if values is not None and any(abs(float(value)) > 1.0e-15 for value in values[1:]):
-            raise ValueError(f"{name} must be a pure dipole; harmonic {key} fields must be zero")
 
 
 def repeat_cell(
@@ -713,7 +686,7 @@ def magnet_strength_limits(
     max_abs_angle_rad=Bmax*L/Brho and max_abs_k1l_m1/k2l_m2/k3l_m3=Kn_max*L.
     JuTrack stores scalar k2/k3 as derivatives; PolynomB uses k2/2 and k3/6.
     Octupole limits require BOTH explicit field and radius; no technology default
-    is invented. This envelope does not authorize combined-function dipoles.
+    is invented. Applicability of any field envelope depends on the declared magnet technology.
     """
 
     values = {
@@ -995,8 +968,6 @@ def evaluate(
     lattice_cell_partition(lattice_ir)
     jt = load_pyjutrack()
     linear = _linear_evaluation(jt, lattice_ir)
-    from .result_presentation import remember_candidate_evidence
-    remember_candidate_evidence(lattice_ir, linear=linear)
     if not include_profile:
         linear.pop("twiss_profile", None)
         linear.pop("one_turn_matrix", None)
@@ -1111,8 +1082,6 @@ def evaluate_periodic_cell(
 
     mutable = JuTrackService(jt).build_lattice(lattice_ir)
     linear = jutrack_linear_metrics(jt, mutable, include_profile=include_profile)
-    from .result_presentation import remember_candidate_evidence
-    remember_candidate_evidence(lattice_ir, linear=linear)
     if bool(linear.get("stable")):
         for plane in ("x", "y"):
             tune = linear.get(f"tune_{plane}")
@@ -1566,8 +1535,6 @@ def bend_radiation_contributions(
             "ring_length_m": lattice.total_length_m,
             "ring_bend_sum_rad": lattice.bend_sum_rad,
         })
-    from .result_presentation import remember_candidate_evidence
-    remember_candidate_evidence(source_candidate, bends=evidence)
     return evidence
 
 
@@ -1913,6 +1880,19 @@ def process_batch_evaluator(
             else 1
         )
     return ProcessBatchEvaluator(evaluator_factory, workers=workers, verbose=verbose)
+
+
+def parallel_evaluator(evaluator_factory: Any, *, workers: int | None = None,
+                       on_result: Any = None, cancellation_check: Any = None) -> Any:
+    """Resource-budgeted process evaluator for arbitrary scans and optimizers.
+
+    The zero-argument factory initializes JuTrack inside each isolated worker.
+    The returned context manager accepts batches and returns ordered results.
+    on_result(index, result, status) executes only in the coordinator.
+    """
+    from .parallel_evaluation import ParallelEvaluator
+    return ParallelEvaluator(evaluator_factory, workers=workers, on_result=on_result,
+                             cancellation_check=cancellation_check)
 
 
 # General lattice-optimization building blocks are re-exported here so model-

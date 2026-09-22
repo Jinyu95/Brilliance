@@ -263,8 +263,9 @@ class ExpertRegistry:
                 "generated": "tool schemas, runtime adapters, catalog records, and fingerprints",
                 "legacy": "expert.toml remains readable but is not required for new modules",
                 "rule": (
-                    "Missing expertise is reported as a module gap; the model must not invent "
-                    "an expert method or silently upgrade draft knowledge to validated evidence."
+                    "Expert notes are optional resources, not mandatory routes. The model may "
+                    "develop and test new methods, but must not present draft knowledge or "
+                    "untested hypotheses as validated evidence."
                 ),
             },
         }
@@ -400,7 +401,7 @@ class ExpertRegistry:
         self,
         query: str,
         *,
-        max_chars: int = 80_000,
+        max_chars: int = 12_000,
         max_chunks: int = 16,
         module_id: str | None = None,
     ) -> tuple[KnowledgeChunk, ...]:
@@ -523,7 +524,7 @@ class ExpertRegistry:
         self,
         query: str,
         *,
-        max_chars: int = 80_000,
+        max_chars: int = 12_000,
         max_chunks: int = 16,
         module_id: str | None = None,
     ) -> str:

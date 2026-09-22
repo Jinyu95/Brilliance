@@ -1,39 +1,40 @@
-# MBA module: analytical TME reference tools
-
-Load the module from an ordinary research program:
+# Homogeneous-bend TME references
 
 ```python
 from brilliance import accelerator_api as api
-
 mba = api.expert_module("laboratory.mba_design")
 reference = mba.tme_targets(
-    energy_gev=energy, bend_length_m=individual_bend_length,
-    bend_angle_rad=individual_bend_angle, damping_partition_x=1.0,
+    energy_gev=E, bend_length_m=Lb, bend_angle_rad=theta,
+    damping_partition_x=1.0,
 )
 ```
 
-`mba.tme_targets(...)` supplies analytical homogeneous-bend reference scales, never
-JuTrack evidence. Pass the **individual bend** angle and length, not the complete
-MBA angle or length. It returns `TMECellTargets`, with typed attributes
-`energy_gev`, `bend_length_m`, `bend_angle_rad`, `beta_x_center_m`, `alpha_x_center`,
-`dispersion_x_center_m`, `dispersion_px_center`, `minimum_emittance_m`,
-`minimum_emittance_pm`, and `model`. `reference.as_dict()` contains all values.
+Use the individual physical bend's length and angle. For the small-angle,
+homogeneous-bend approximation, the bend-centre reference is
 
-Evaluate the actual unit separately using JuTrack. Do not impose zero dispersion
-at its boundary: achromat matching belongs to the complete MBA. An analytical
-reference is not proof that a practical unit or the complete cell attains TME.
+```text
+βx = Lb/(2√15),  αx = 0,  Dx = Lb*theta/24,  Dpx = 0
+εTME = Cq*γ²*|theta|³/(12√15*Jx),  Cq = 3.8319e-13 m
+```
 
-For a complete ring with unequal bend angles or lengths,
-`mba.homogeneous_bend_tme_reference(ring, damping_partition_x=1.0)` combines the
-individual homogeneous-bend reference integrals into one geometry-weighted
-emittance scale. It is a normalization for reporting the actual/reference ratio,
-not a simulated lattice result or a guaranteed attainable lower bound. It returns
-a mapping with `model`, `lattice_id`, `damping_partition_x`, `I2_reference`,
-`I5_reference`, `reference_emittance_m`, `reference_emittance_pm`, `rows`, and
-`interpretation`; use `reference["reference_emittance_pm"]`, never `float(reference)`.
+`reference.as_dict()` exposes the centre values and `minimum_emittance_pm`.
+Jx=1 is an analytical assumption, not measured damping. These values guide
+initialization/interpretation; they are not JuTrack results or mandatory targets.
+Modified TME trades emittance against practical focusing and chromaticity, not
+a universal fixed multiple of this reference.
 
-The conventional method explains the centre conditions and physical seed geometry.
-Source boundaries: [homogeneous-bend TME](https://lss.fnal.gov/archive/test-tm/1000/fermilab-tm-1269.pdf)
-is an analytical scale; [modified-TME](https://doi.org/10.1103/PhysRevSTAB.14.054002)
-trades theoretical emittance for practical optics, not a universal fixed factor.
-Neither source supplies stored strengths for this module.
+For unequal bend angles/lengths,
+`mba.homogeneous_bend_tme_reference(candidate, damping_partition_x=Jx)` returns
+`reference_emittance_pm` from the ratio of summed reference I5 and I2.
+Identical-bend multiplicity cancels: never multiply a single-bend emittance by
+the number of bends. This is a geometry-based normalization, not a guaranteed
+attainable complete-lattice minimum.
+
+Use `mba.mba_radiation_report(candidate, evaluation)` to compare exact scoped
+JuTrack emittance against this normalization. A unit's ratio does not describe
+its assembled MBA. Actual radiation uses εx=Cq*γ²*I5/(Jx*I2), with physical
+damping and finite positive equilibrium quantities checked separately.
+
+Background: [homogeneous-bend TME](https://lss.fnal.gov/archive/test-tm/1000/fermilab-tm-1269.pdf)
+and [modified TME](https://doi.org/10.1103/PhysRevSTAB.14.054002).
+The links are optional reading; this knowledge does not require internet access.

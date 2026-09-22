@@ -51,6 +51,7 @@ description = "Requested runtime allowance/estimate. The short-run default is 60
 [tools.parameters.properties.require_optimizer_evidence]
 type = "boolean"
 default = false
+description = "Deprecated compatibility argument; ignored. The research program chooses its method."
 
 [[tools]]
 id = "accelerator.run_long_research_program"
@@ -85,3 +86,4 @@ description = "Report when this runtime estimate is exceeded while keeping the d
 [tools.parameters.properties.require_optimizer_evidence]
 type = "boolean"
 default = false
+description = "Deprecated compatibility argument; ignored. The research program chooses its method."

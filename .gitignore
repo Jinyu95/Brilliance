@@ -31,7 +31,20 @@ conda-env/
 workspace/
 sessions/
 research_runs*/
-research_projects/
+/research_projects/
+
+# Local development and private post-analysis (kept on disk, not published).
+/tests/
+/diagnostics/
+/development_archive/
+/publication_tools/
+/publication_reports/
+/lattice_exports/
+/benchmarks/
+/scripts/validate_*.py
+/scripts/release_trial_support.py
+/.tmp-*/
+*.dmp
 .brilliance/
 
 # IDE

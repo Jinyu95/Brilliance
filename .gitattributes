@@ -1,0 +1,2 @@
+# Preserve the static demonstration and original figure bytes across platforms.
+examples/mba-design/** -text

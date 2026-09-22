@@ -64,7 +64,7 @@ def lint_worker_factory_captures(tree: ast.AST) -> list[str]:
         factories = [kw.value for kw in call.keywords
                      if kw.arg in {"worker_physics_factory", "evaluator_factory"}]
         name = call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", "")
-        if name == "ProcessBatchEvaluator" and call.args:
+        if name in {"ProcessBatchEvaluator", "ParallelEvaluator", "parallel_evaluator", "process_batch_evaluator"} and call.args:
             factories.append(call.args[0])
         for factory in factories:
             if isinstance(factory, ast.Name) and (path := capture(factory.id, set())):

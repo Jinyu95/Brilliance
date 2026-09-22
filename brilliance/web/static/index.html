@@ -4,17 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f7f7f5">
-  <title>BRILLIANCE · JuTrack research</title>
+  <title>Brilliance · Accelerator research</title>
+  <meta name="description" content="Beam Research Intelligence with Large Language-model Integration for Accelerator Numerical Computation and Exploration">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2320201e'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='40' font-family='serif' fill='white'%3EB%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/static/styles.css">
-  <link rel="stylesheet" href="/static/workbench.css">
+  <link rel="stylesheet" href="/static/styles.css?v=20260920-account">
+  <link rel="stylesheet" href="/static/workbench.css?v=20260920-account">
 </head>
 <body>
   <div id="app" class="app-shell">
     <aside id="sidebar" class="sidebar">
       <div class="brand-row">
         <div class="brand-mark">B</div>
-        <div><strong>BRILLIANCE</strong><small>JuTrack research</small></div>
+        <div><strong>Brilliance</strong><small>Accelerator research</small></div>
         <button id="close-sidebar" class="icon-button mobile-only" aria-label="Close sidebar">×</button>
       </div>
       <button id="new-chat" class="new-chat"><span>＋</span> New research</button>
@@ -35,12 +36,14 @@
         </div>
         <div id="status-pill" class="status-pill hidden"></div>
         <button id="pause-agent" class="text-button hidden" type="button">Pause agent</button>
+        <button id="model-settings" class="text-button" type="button">Models &amp; account</button>
         <button id="workspace-toggle" class="text-button" type="button" aria-expanded="false">Workspace</button>
       </header>
 
       <section id="welcome" class="welcome">
         <div class="hero-mark">B</div>
-        <h1>Your accelerator research workspace</h1>
+        <h1>Brilliance</h1>
+        <p>Beam Research Intelligence with Large Language-model Integration for Accelerator Numerical Computation and Exploration</p>
         <p>Ask a physics question. Develop and run code with JuTrack, inspect the evidence, and change direction together. You can send a message at any time.</p>
         <div class="examples">
           <button class="example" data-prompt="Design a 3 GeV, 32-cell MBA ring. Start with the physical requirements and show the first computed candidate.">Explore an MBA design</button>
@@ -80,6 +83,6 @@
     </aside>
   </div>
   <div id="toast" class="toast hidden" role="status"></div>
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v=20260920-account" defer></script>
 </body>
 </html>

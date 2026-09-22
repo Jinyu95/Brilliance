@@ -131,6 +131,9 @@ def resolve_codex_backend(
 ) -> CodexBackend:
     """Resolve the selected backend without falling back to an OpenAI model."""
 
+    if env is None:
+        from .model_settings import apply_model_settings
+        apply_model_settings()
     values = os.environ if env is None else env
     selected = _value(values, "BRILLIANCE_CODEX_PROVIDER").lower() or "deepseek"
     aliases = {
@@ -142,6 +145,14 @@ def resolve_codex_backend(
         "codex": "openai",
     }
     selected = aliases.get(selected, selected)
+
+    if selected == "chatgpt":
+        model = _value(values, "BRILLIANCE_CODEX_MODEL")
+        overrides = ('model_provider="openai"',) + ((f"model={_toml_string(model)}",) if model else ())
+        return CodexBackend(key="chatgpt", name="ChatGPT subscription", provider_id="openai",
+                            model=model, mode="subscription", config_overrides=overrides,
+                            supports_reasoning_effort=True,
+                            setup_hint="Sign in with ChatGPT in Models & account. API keys are not used in this mode.")
 
     context_window = _positive_int(
         _value(values, "BRILLIANCE_CODEX_CONTEXT_WINDOW"),
@@ -284,6 +295,20 @@ def resolve_codex_backend(
 
     if selected == "openai":
         model = _value(values, "BRILLIANCE_CODEX_MODEL")
+        auth = (_value(values, "BRILLIANCE_OPENAI_AUTH") or "auto").lower()
+        if auth not in {"auto", "api_key", "codex"}:
+            raise CodexBackendError("BRILLIANCE_OPENAI_AUTH must be auto, api_key, or codex.")
+        if auth == "api_key" or (auth == "auto" and _value(values, "OPENAI_API_KEY")):
+            if validate_credentials and not _value(values, "OPENAI_API_KEY"):
+                raise CodexBackendError("OpenAI API authentication requires OPENAI_API_KEY in .env.")
+            if not model:
+                raise CodexBackendError("OpenAI API authentication requires BRILLIANCE_CODEX_MODEL.")
+            return CodexBackend(
+                key="openai", name="OpenAI", provider_id="openai", model=model,
+                mode="remote", config_overrides=(), base_url="https://api.openai.com/v1",
+                api_key_env="OPENAI_API_KEY", supports_reasoning_effort=True,
+                wire_api="responses", setup_hint="Configure OPENAI_API_KEY and BRILLIANCE_CODEX_MODEL.",
+            )
         overrides = tuple(
             item
             for item in (
@@ -314,7 +339,7 @@ def describe_codex_backend(env: Mapping[str, str] | None = None) -> dict[str, ob
 
     try:
         backend = resolve_codex_backend(env, validate_credentials=False)
-    except CodexBackendError as exc:
+    except (CodexBackendError, ValueError, OSError) as exc:
         return {
             "key": "invalid",
             "name": "Model backend not configured",

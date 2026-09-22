@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "brilliance"
-version = "0.7.0"
-description = "Evidence-gated accelerator-physics research with JuTrack as the primary engine"
+version = "0.8.0"
+description = "Beam Research Intelligence with Large Language-model Integration for Accelerator Numerical Computation and Exploration"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -22,32 +22,27 @@ classifiers = [
 ]
 
 dependencies = [
-    # Julia bridge — installs Julia automatically via juliacall if not found
     "juliacall>=0.9.20",
     "juliapkg>=0.1.10",
-    # pyJuTrack from the bundled source (installed via setup_env.py)
-    # Listed here for documentation; the actual install targets JuTrack.jl/python_integration/
     "numpy>=1.24",
-    # Supported scientific toolbox available to every model-authored program.
     "scipy>=1.11",
     "pandas>=2.0",
     "sympy>=1.12",
     "h5py>=3.10",
     "joblib>=1.3",
-    # Trusted headless scientific plotting for agent-authored figures and pyJuTrack.
+    "psutil>=5.9",
     "matplotlib>=3.8",
-    # Mature conversational agent runtime; reuses an existing Codex login.
-    "openai-codex==0.147.0",
-    # Chat-native application
+    "pypdf>=5",
+    "openai-codex==0.155.1",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "python-dotenv>=1.0",
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
-    "httpx>=0.27",
     "black",
     "ruff",
 ]

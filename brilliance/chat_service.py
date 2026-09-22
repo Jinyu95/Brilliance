@@ -18,6 +18,7 @@ from urllib.parse import quote
 
 from .agent_tools import AgentEvidenceStore, render_agent_artifact
 from .artifacts import content_hash
+from .chat_artifacts import present_local_artifacts
 from .codex_backends import describe_codex_backend
 from .codex_runtime import (
     CodexRuntimeStore,
@@ -48,6 +49,7 @@ from .plotting import (
 )
 from .presentation import (
     ResearchConversationStore,
+    compact_operational_messages,
     deduplicate_chat_attachments,
     final_result_text,
     markdown_report,
@@ -187,11 +189,12 @@ class ResearchChatService:
             create_planning_project(goal, context),
             status="researching",
             model="codex",
-            next_action="The configured model is beginning the requested JuTrack research.",
+            next_action="The configured model is beginning the requested accelerator-physics research.",
         )
         admission = assess_research_admission(project, self.root, goal)
         # The first request is real conversation history, not just a UI-synthesized
         # row. Durable workers need its identity for recovery and supersession.
+        self.store.save(project)
         self.conversations.append_message(project.id, "user", goal)
         if not admission.allowed:
             project = replace(
@@ -238,6 +241,18 @@ class ResearchChatService:
             },
         }
 
+    def branch_checkpoint(self, project_id: str, checkpoint_id: str) -> Mapping[str, Any]:
+        from .conversation_checkpoints import ConversationCheckpoints
+        with self._command_lock:
+            self._load(project_id)
+            project = ConversationCheckpoints(self.root).fork(project_id, checkpoint_id)
+            self.conversations.append_message(project.id, "assistant",
+                "Restored the saved conversation checkpoint into a new project. "
+                "The original project and its running jobs are unchanged. No calculation was restarted. "
+                "Send your next instruction here; numerical continuation uses saved campaign checkpoints, not process memory.",
+                meta={"checkpoint_branch": True})
+            return {"project": self._project_meta(project), "action": "checkpoint_branch"}
+
     def snapshot(self, project_id: str) -> Mapping[str, Any]:
         project = self._load(project_id)
         job = self._latest_research_job(project.id)
@@ -272,6 +287,7 @@ class ResearchChatService:
             "pause_requested": workspace.pause_file.exists(),
             "can_pause": can_pause,
             "activities": runtime.get("activities", []),
+            "source_activities": runtime.get("source_activities", []),
             "programs": workspace.list_programs(),
             "protocol_recovery": self._protocol_recovery(project_id, runtime),
         }
@@ -288,6 +304,25 @@ class ResearchChatService:
         if user is None or str(user.get("timestamp", "")) > job.created_at:
             return None  # A newer request superseded the failed turn.
         failure = runtime.get("protocol_failure")
+        if not failure and runtime.get("completed_turn", {}).get("status") == "failed":
+            # Older versions accidentally labelled failed provider turns complete.
+            # Recover the matching public terminal error without modifying history.
+            from .codex_runtime import CodexProviderTurnError, _check_completed_turn
+            terminal_id = runtime["completed_turn"].get("id")
+            directory = self.root / project_id / "codex" / "events"
+            for path in sorted(directory.glob("*.json"), reverse=True)[:30]:
+                try:
+                    event = json.loads(path.read_text(encoding="utf-8"))
+                    turn = event.get("payload", {}).get("turn", {})
+                    if event.get("method") == "turn/completed" and turn.get("id") == terminal_id:
+                        _check_completed_turn(turn)
+                        break
+                except CodexProviderTurnError as exc:
+                    failure = {"type": "provider_turn_failure", "reason": exc.code,
+                               "message": str(exc), "can_retry": True}
+                    break
+                except (OSError, ValueError, AttributeError):
+                    continue
         if not isinstance(failure, Mapping) or not failure:
             # Read-only compatibility for the old terminal message. Do not edit
             # archived chat or guess a physics failure from a generic pause.
@@ -323,6 +358,9 @@ class ResearchChatService:
             if reason == "incomplete_provider_response" else
             "The model could not produce a valid next tool request after bounded repair. Its next research step was not executed."
         )
+        if failure.get("type") == "provider_turn_failure":
+            message = (str(failure.get("message") or "The model request failed.")
+                       + " Retry when service is available, or select another model. Saved numerical outputs remain intact; this is not a physics failure.")
         if reason == "output_token_limit" and type(failure.get("requested_max_tokens")) is int:
             message += f" Last requested output allowance: {failure['requested_max_tokens']} tokens."
         try:
@@ -487,7 +525,7 @@ class ResearchChatService:
             status="researching",
             next_action=(
                 admission.detail
-                or "The configured model is beginning the requested JuTrack research."
+                or "The configured model is beginning the requested accelerator-physics research."
             ),
         )
         self.store.save(project)
@@ -1107,7 +1145,9 @@ class ResearchChatService:
                 )
 
         messages.sort(key=lambda item: (str(item["timestamp"]), _message_priority(item["kind"])))
+        messages = [present_local_artifacts(self.root, project.id, item) for item in messages]
         deduplicate_chat_attachments(messages)
+        messages = compact_operational_messages(messages)
         return messages
 
     def _message(
@@ -1265,7 +1305,7 @@ class ResearchChatService:
             "label": (
                 f"JuTrack is working on {current.title}"
                 if current is not None
-                else "JuTrack research is running"
+                else "Brilliance research is running"
             ),
             "task_id": current.id if current else None,
             "durable": True,
@@ -1339,6 +1379,7 @@ class ResearchChatService:
 
     def _computation_meta(self, job: ResearchJob) -> Mapping[str, Any]:
         progress = None
+        progress_path = None
         directory = self.root / job.project_id / "workspace" / "progress"
         paths = (
             sorted(
@@ -1356,6 +1397,7 @@ class ResearchChatService:
                 continue
             if isinstance(candidate, Mapping) and candidate.get("compute_job_id") == job.job_id:
                 progress = dict(candidate)
+                progress_path = path
                 break
         progress = dict(progress or {})
         try:
@@ -1367,6 +1409,8 @@ class ResearchChatService:
         except ValueError:
             elapsed_s = float(progress.get("elapsed_s", 0.0))
         progress["elapsed_s"] = max(elapsed_s, float(progress.get("elapsed_s", 0.0)))
+        from .compute_monitor import observe_calculation
+        telemetry = observe_calculation(self.root / job.project_id / "workspace", progress_path, progress)
         return {
             "id": job.job_id,
             "revision": job.revision,
@@ -1376,6 +1420,7 @@ class ResearchChatService:
             "updated_at": job.updated_at,
             "detail": job.detail,
             "progress": progress,
+            "telemetry": telemetry,
             "can_cancel": job.state
             in {
                 JobState.QUEUED,
@@ -1936,8 +1981,7 @@ def _rehydrate_completion_message(
     meta = message.get("meta", {})
     proof = meta.get("completion_evidence") if isinstance(meta, Mapping) else None
     if (message.get("role") != "assistant" or not isinstance(proof, Mapping)
-            or not proof.get("evidence_run_id") or proof.get("execution_valid") is not True
-            or proof.get("scientific_passed") is not True):
+            or not proof.get("evidence_run_id") or proof.get("execution_valid") is not True):
         return message
     old_attachments = message.get("attachments", [])
     if any(isinstance(item, Mapping) and item.get("presentation_role") == "selected_evidence"

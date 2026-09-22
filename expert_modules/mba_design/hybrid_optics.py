@@ -2,12 +2,9 @@
 from __future__ import annotations
 
 import math
-from copy import deepcopy
 from typing import Any, Mapping, Sequence
 
 import numpy as np
-
-from brilliance.lattice_fingerprint import cell_fingerprint
 
 TWISS_FIELDS = ("beta_x", "beta_y", "alpha_x", "alpha_y", "Dx", "Dpx")
 CORE_TOLERANCES = {"beta_relative": .01, "alpha_absolute": .01,
@@ -101,29 +98,6 @@ def usable_bump_drifts(rows, profile, roles, thresholds, core_dispersion_m):
             "required_drift_dispersion_m": target, "passed": all(checks.values())}
 
 
-def measure_core_optics(candidate, *, core_start_name: str, core_end_name: str,
-                        max_step_m: float = .02) -> dict[str, Any]:
-    """Measure the explicit source cell before modifying it; no saved seed lookup."""
-    from brilliance import accelerator_api as api
-    sampler = api.build_jutrack_profile_sampler(candidate, max_step_m=max_step_m)
-    linear = sampler.linear_metrics()
-    if not linear.get("stable"):
-        raise ValueError("Core reference requires a stable, map-checked source cell")
-    rows = api.one_period_elements(candidate)
-    names = [r["name"] for r in rows]
-    start, end = names.index(core_start_name), names.index(core_end_name)
-    if start > end:
-        raise ValueError("Core boundaries must be ordered")
-    s0 = sum(r["length_m"] for r in rows[:start])
-    s1 = sum(r["length_m"] for r in rows[:end+1])
-    points = [deepcopy(p) for p in linear["twiss_profile"]
-              if s0-1e-9 <= p["s_m"] <= s1+1e-9 and not p.get("extremum_method")]
-    return {"schema": "hybrid_core_optics/v1", "source_lattice_id": candidate.lattice_id,
-            "source_cell_fingerprint": cell_fingerprint(rows), "energy_gev": candidate.energy_gev,
-            "core_start_name": core_start_name, "core_end_name": core_end_name,
-            "s_start_m": s0, "s_end_m": s1, "max_step_m": max_step_m,
-            "profile": points, "entrance": deepcopy(_at(points, s0)),
-            "exit": deepcopy(_at(points, s1)), "sampling": linear["sampling"]}
 
 
 def compare_core_optics(reference: Mapping[str, Any], profile: Sequence[Mapping[str, Any]], *,

@@ -38,8 +38,8 @@ allow_runtime_dependency_updates = false
 candidate_wall_time_s = 3600
 # This controls research-tool network access, not the configured LLM provider.
 # false disables Codex web search, apps/connectors/plugins, browser tools, and
-# shell-command networking. It does not disable local stdio MCP. Change it to
-# true only for an explicitly online study.
+# shell-command networking. It does not disable local stdio MCP. Online research
+# is the default; set false (and remote_http_enabled=false) for an offline study.
 internet_access = true
 
 # workspace-write permits JuTrack to read its installation while limiting writes
@@ -55,17 +55,16 @@ local_worker_processes = 8
 threads_per_worker = 1
 
 [optimization]
-# Applied to new managed PSO/MOPSO campaigns, independently of research topic.
-# Smaller model-written budgets are raised visibly. Only the scientist should
-# lower these settings. Existing checkpoint swarms retain their original size.
-minimum_population = 500
-minimum_population_per_knob = 10
-minimum_generations = 80
+# Used only when the research program omits a budget. The model may choose a
+# different budget for its measured problem; no automatic size/iteration floors.
+# These numbers say nothing about feasibility or convergence.
+default_population = 64
+default_generations = 40
 
 [mcp]
 # MCP is not synonymous with internet access. Preinstalled command-launched
 # stdio servers remain available in offline research mode. URL-based MCP servers
-# are a separate outbound-network capability and stay off for the current study.
+# are a separate outbound-network capability; disable them for an offline study.
 local_stdio_enabled = true
 remote_http_enabled = true
 
@@ -76,7 +75,7 @@ remote_http_enabled = true
 paths = ["expert_modules"]
 strict = true
 project_modules_enabled = true
-max_context_chars = 80000
+max_context_chars = 12000
 
 [interaction]
 # Pause after one meaningful scientific milestone so the scientist can inspect
@@ -86,3 +85,12 @@ auto_continue = false
 max_autonomous_increments = 1
 turn_wall_time_s = 3600
 require_scientist_checkpoint = true
+max_consecutive_timeouts = 2
+
+[recovery]
+# Distinct errors may be repaired within the request-wide safety budget.
+# Repeated errors after edited attempts have a separate no-progress limit.
+# Identical failed source and inputs are never automatically rerun.
+# 0 request attempts disables automatic repair. Model choice does not alter these limits.
+max_attempts_per_request = 12
+max_attempts_per_error = 3
