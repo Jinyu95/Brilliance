@@ -206,7 +206,7 @@ def _run_probe(python: Path, *, offline: bool) -> subprocess.CompletedProcess:
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=900,
+        timeout=1800,
     )
 
 

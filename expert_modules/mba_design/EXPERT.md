@@ -5,7 +5,7 @@ summary: Concise MBA design knowledge and optional JuTrack-backed diagnostics; n
 domains: [mba, lattice design, electron storage rings, synchrotron light sources]
 authors: [Brilliance project team (draft maintainer)]
 tags: [mba, 5ba, 6ba, 7ba, 9ba, tme, modified-tme, hybrid-mba, emittance, chromatic, sextupole, matching, radiation, optimization, jutrack]
-version: 3.4.0
+version: 3.5.0
 status: draft
 knowledge_status: draft
 kind: method
@@ -38,10 +38,10 @@ revise a route, geometry, solver or objective using measured evidence.
 
 Co-design radiation, sextupole sites and nonlinear acceptance; retain competing
 matched candidates. There is no preferred bend count: honor requested topology,
-otherwise compare alternatives. When users suggest multiple MBAs, explicitly
-evaluate that architecture before substituting a single many-bend cell. Describe
-constituent achromats, intermediate user straights and correction pairing.
-Read the design decisions reference; more bends alone do not create hierarchy.
+otherwise compare alternatives. For complex superperiods, read the design
+decisions reference: jointly design low-H bending sections, localized chromatic
+bumps and user straights, not concatenated finished MBAs. Explain the proposed
+optical roles and correction pairing before searching; address user suggestions.
 Papers supply hypotheses, not templates. The TME recipe is optional.
 
 Use exact current-project candidates for follow-ups and keep trial branches

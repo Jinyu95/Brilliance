@@ -1,6 +1,6 @@
 # MBA design decisions: radiation, chromatic optics and acceptance
 
-Compare hypotheses with JuTrack, not a prescribed route or facility template.
+Test hypotheses with JuTrack; do not copy templates.
 
 ## Very-low-emittance architecture hypotheses
 
@@ -20,21 +20,25 @@ quadrupoles; include compensating positive bending and correct orbit/aperture
 modeling. These mechanisms can cooperate, but none guarantees improvement.
 [First-principles field/optics comparisons](https://arxiv.org/abs/1810.11286).
 
-Think hierarchically: two hybrid MBAs may form a superperiod; two superperiods
-may form a four-MBA repeating block. Explore one or two chromatic bumps across
-the selected block, not automatically two per MBA. Jointly redesign interfaces:
-concatenation alone neither removes bumps nor creates correction freedom.
-Introduce independent families/phases; approximate reflection symmetry belongs
-to the chosen block. This is optional, not a fixed layout or doubling sequence.
+## Design optical regions, not concatenated MBAs
 
-Preserve each MBA's achromatic boundaries (Dx/Dpx zero within tolerances) to
-retain intermediate user straights. These can remain insertion-device sections
-inside larger superperiods: verify magnet-free length, matched betas and device
-requirements after rematching. Achromaticity alone is insufficient. Count MBAs,
-user straights and repeating blocks separately; preserve circumference/counts.
+A possible block follows: half-straight, low-H bending/focusing section, bump,
+low-H section, intermediate straight, low-H section, second bump, low-H section,
+half-straight. These are optical roles, not a magnet sequence or universal
+two-bump requirement. Declare the actual repeating block, boundary maps and
+ring counts; a plot does not establish half-cell/full-period identity.
 
-Match radiation, chromatic and insertion optics together using grouped controls.
-Judge larger blocks by measured benefits, not complexity.
+Jointly design sections, not pairs of finished MBAs. Do not preserve inherited
+unit tunes or arbitrary internal periodic/achromat boundaries. Match Dx/Dpx to
+zero at user straights with useful betas and magnet-free length. Seek low
+dispersion/H elsewhere, not exactly zero throughout bends; measure radiation
+cost in bump transitions.
+
+Reserve finite sextupole sites with complementary beta weights; pair across
+the block, including straights. Co-vary geometry, bending and focusing without
+sacrificing low-H regions. Symmetry/grouped controls are optional aids. Report
+bump-site optics, non-bump H/I5 and each user straight separately, not just
+emittance or peak dispersion. Preserve machine requirements and straight counts.
 
 ## Decide from measurements
 
@@ -45,16 +49,15 @@ Judge larger blocks by measured benefits, not complexity.
 | Saturated or ineffective controls | Measure response and singular values; test regrouping, relocation or geometry. |
 | Improved bend profile | Rematch the complete ring; compare I2/I4/I5, damping and acceptance under consistent constraints. |
 
-Retain alternatives. Failed searches do not prove impossibility.
+Retain alternatives; failed searches cannot prove impossibility.
 [Radiation/chromatic trade-offs](https://arxiv.org/abs/2105.14492).
 
 ## Sites, cancellation and nonlinear controls
 
-For a two-outer-bump 7BA hypothesis, B1–B2/B6–B7 are outer regions and B3–B5
-the core, counting physical main bends, not slices or inherited unit names.
-Both SF/SD sites can occupy distinct finite intervals in each outer region;
-adjacent drifts may form an installation span. Measure site Dx/Dpx/betas and
-core H/I5 separately. Other structures need their own optical-role regions.
+Only for the conventional two-outer-bump 7BA hypothesis, B1–B2/B6–B7 are outer
+regions and B3–B5 the core (physical bends, not slices). Both SF/SD sites can
+occupy distinct drift intervals within each outer region. Other structures
+need their actual optical-role regions, not this numbering rule.
 
 Nominal −I is not a tracking result: evaluate complete two-plane pair maps,
 endpoint optics, finite sextupole lengths and off-momentum departures.
