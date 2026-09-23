@@ -48,7 +48,7 @@ _PHYSICAL_FIELDS = {"length_m", "angle_rad", "k1_m2", "k2_m3", "k3_m4"}
 _FIELD_KINDS = {
     "length_m": None,
     "angle_rad": {"SBEND", "RBEND"},
-    "k1_m2": {"KQUAD"},
+    "k1_m2": {"KQUAD", "QUAD", "SBEND", "RBEND"},
     "k2_m3": {"KSEXT"},
     "k3_m4": {"KOCT"},
 }
@@ -469,11 +469,26 @@ def jutrack_linear_metrics(
     lattice: Any,
     *,
     include_profile: bool = False,
+    energy_gev: float | None = None,
 ) -> dict[str, Any]:
-    """Evaluate a mutable JuTrack lattice without rebuilding a LatticeIR."""
+    """Evaluate a mutable JuTrack lattice without rebuilding a LatticeIR.
+
+    Pass energy_gev to use the same explicit beam energy in all native map,
+    periodic-optics, tune and profile calls. Omitting it preserves JuTrack's
+    existing per-function defaults for backwards compatibility.
+    """
+
+    map_options: dict[str, float] = {}
+    tune_options: dict[str, float] = {}
+    if energy_gev is not None:
+        energy = float(energy_gev)
+        if not math.isfinite(energy) or energy <= 0.0:
+            raise ValueError("energy_gev must be positive and finite")
+        map_options["E0"] = energy * 1e9
+        tune_options["energy"] = energy * 1e9
 
     try:
-        matrix = np.asarray(jt.findm66(lattice, dp=0.0), dtype=float)
+        matrix = np.asarray(jt.findm66(lattice, dp=0.0, **map_options), dtype=float)
         if matrix.shape != (6, 6):
             raise TypeError(f"JuTrack findm66 must return a 6x6 matrix; got {matrix.shape}")
         trace_x = float(np.trace(matrix[:2, :2]))
@@ -487,13 +502,13 @@ def jutrack_linear_metrics(
     ):
         return {"stable": False, "trace_x": trace_x, "trace_y": trace_y}
     try:
-        periodic = jt.periodicEdwardsTengTwiss(lattice, 0.0, 0)
+        periodic = jt.periodicEdwardsTengTwiss(lattice, 0.0, 0, **map_options)
         # JuTrack explicitly returns mode=0 for an undecouplable/unstable map.
         # Do not confuse this sentinel with a failed bridge call or bad API.
         if getattr(periodic, "mode", 1) == 0:
             return {"stable": False, "trace_x": trace_x, "trace_y": trace_y,
                     "reason": "JuTrack periodic Twiss returned invalid mode=0"}
-        tune = [float(item) for item in jt.gettune(lattice)]
+        tune = [float(item) for item in jt.gettune(lattice, **tune_options)]
         if len(tune) != 2:
             raise TypeError(f"JuTrack gettune must return two tunes; got {len(tune)}")
         metrics: dict[str, Any] = {
@@ -527,6 +542,7 @@ def jutrack_linear_metrics(
                 dp=0.0,
                 order=0,
                 refpts=list(range(1, len(lattice) + 1)),
+                **map_options,
             )
             def profile_row(point: Any, name: str, s_m: float) -> dict[str, Any]:
                 return {
@@ -706,6 +722,13 @@ def compile_lattice_parameterization(
     Each variable needs ``name``, ``field``, ``bounds`` and either
     ``element_names`` or ``indices``.  ``initial`` is inferred only when all
     controlled elements currently share the same value.
+
+    K1 may explicitly control KQUAD, QUAD, SBEND or RBEND elements. Distinct
+    physical positions or numerical bend segments remain independent unless
+    the caller lists them under the same knob; family labels do not merge them.
+    Engineering bounds belong to the caller. A sum target is the contribution
+    of its listed knobs (including target multiplicities), not the whole
+    lattice; subtract fixed contributions or use the mirror inference helper.
     """
 
     rows = _rows(elements)
@@ -789,6 +812,7 @@ def compile_lattice_parameterization(
         raise ValueError("at least one lattice variable is required")
     constraints: list[LinearSumConstraint] = []
     by_name = {item.name: item for item in knobs}
+    constrained_names: set[str] = set()
     for supplied in sum_constraints:
         spec = dict(supplied)
         field = str(spec.get("field", "")).strip()
@@ -800,6 +824,13 @@ def compile_lattice_parameterization(
             raise ValueError(f"sum constraint has unknown variables: {unknown}")
         if any(by_name[name].field != field for name in variable_names):
             raise ValueError("every variable in a sum constraint must control its field")
+        if len(set(variable_names)) != len(variable_names):
+            raise ValueError("sum constraint variable_names must not contain duplicates")
+        if constrained_names.intersection(variable_names):
+            raise ValueError("sum constraints cannot have overlapping variables")
+        mode = str(spec.get("mode", "scale"))
+        if mode not in {"scale", "bounded_sum"}:
+            raise ValueError(f"unsupported sum-constraint mode {mode!r}")
         target = float(spec["target"])
         if not math.isfinite(target):
             raise ValueError("sum-constraint target must be finite")
@@ -808,9 +839,10 @@ def compile_lattice_parameterization(
                 field=field,
                 target=target,
                 variable_names=variable_names,
-                mode=str(spec.get("mode", "scale")),
+                mode=mode,
             )
         )
+        constrained_names.update(variable_names)
     return LatticeParameterization(tuple(rows), tuple(knobs), tuple(constraints))
 
 
@@ -842,6 +874,13 @@ def infer_mirror_symmetric_parameterization(
     When ``included_element_names_by_field`` is provided, ONLY the explicitly
     listed element/field pairs are varied. List both global mirror partners;
     unlisted fields remain fixed, including lengths of strength-only magnets.
+    Without that map, bend gradients remain fixed for compatibility with
+    separate-function searches. Opt in to SBEND/RBEND K1 with explicit names
+    in the inclusion map (and list every other intended tunable field there),
+    or use compile_lattice_parameterization for independent named knobs. No
+    per-unit symmetry, shared bend profile, or field-to-curvature relation is
+    inferred. Use explicit angle bounds to turn a zero-angle bend into a
+    reverse bend; relative angle inference cannot vary a zero seed.
     """
 
     rows = _rows(elements)
@@ -922,6 +961,8 @@ def infer_mirror_symmetric_parameterization(
                     raise OptimizerInputError(f"included {field} conflicts with fixed/excluded elements: {pair_names}")
             allowed_kinds = _FIELD_KINDS[field]
             if allowed_kinds is not None and left_kind not in allowed_kinds:
+                continue
+            if inclusions is None and field == "k1_m2" and left_kind in {"SBEND", "RBEND"}:
                 continue
             seeds = [_field_value(rows[index], field) for index in pair]
             if any(value is None for value in seeds):

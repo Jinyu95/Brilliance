@@ -1,44 +1,25 @@
-# MBA design decisions: radiation, chromatic optics and acceptance
+# Conventional HMBA: established two-outer-bump design
 
-Test hypotheses with JuTrack; do not copy templates.
+This guide covers the established hybrid-MBA architecture: two outer
+chromatic-correction regions surrounding low-H bending, between achromatic
+user straights. The architecture is mature; these notes are draft knowledge,
+not a certificate of numerical or engineering validation.
 
-## Very-low-emittance architecture hypotheses
+For ordinary HMBA requests, start here. For an existing candidate, preserve its
+architecture unless the scientist requests a change or evidence justifies one.
+A very-low-emittance aspiration alone does not invalidate this route. Distinct exploratory
+superperiods are covered in [Very-low-emittance design](very_low_emittance.md);
+they do not replace this method.
 
-For uncoupled natural horizontal emittance,
-`epsilon_x = Cq * gamma^2 * I5 / (Jx * I2)`,
-`I5 = integral(Hx * abs(h)^3 ds)`, `Jx = 1 - I4/I2`.
-Low Dx alone is not low H: Dpx and Twiss functions matter. Diagnose excitation
-by physical bend/region; isolated-unit TME is not complete-ring emittance.
-
-Explore many weak physical bends, balancing their smaller-angle emittance scale
-against space/focusing costs. Numerical slicing alone creates no benefit.
-Combined-function dipoles can alter focusing and damping partition; check I4,
-positive damping and aperture-dependent combined fields. Longitudinal-gradient
-bends redistribute curvature relative to H; distinguish physical modules from
-numerical segments. Weak reverse bends may be dedicated magnets or bending
-quadrupoles; include compensating positive bending and correct orbit/aperture
-modeling. These mechanisms can cooperate, but none guarantees improvement.
-[First-principles field/optics comparisons](https://arxiv.org/abs/1810.11286).
-
-## Design optical regions, not concatenated MBAs
-
-A possible block follows: half-straight, low-H bending/focusing section, bump,
-low-H section, intermediate straight, low-H section, second bump, low-H section,
-half-straight. These are optical roles, not a magnet sequence or universal
-two-bump requirement. Declare the actual repeating block, boundary maps and
-ring counts; a plot does not establish half-cell/full-period identity.
-
-Jointly design sections, not pairs of finished MBAs. Do not preserve inherited
-unit tunes or arbitrary internal periodic/achromat boundaries. Match Dx/Dpx to
-zero at user straights with useful betas and magnet-free length. Seek low
-dispersion/H elsewhere, not exactly zero throughout bends; measure radiation
-cost in bump transitions.
-
-Reserve finite sextupole sites with complementary beta weights; pair across
-the block, including straights. Co-vary geometry, bending and focusing without
-sacrificing low-H regions. Symmetry/grouped controls are optional aids. Report
-bump-site optics, non-bump H/I5 and each user straight separately, not just
-emittance or peak dispersion. Preserve machine requirements and straight counts.
+Use a measured conventional MBA as a seed when available, or construct the
+complete hybrid cell directly. Jointly match outer bump/suppressor regions,
+low-H core and user straights. Release geometry and global mirror-paired
+strengths as needed; do not preserve each seed unit's internal symmetry or tune.
+Provide finite SF/SD sites with useful dispersion and complementary betas.
+Use the actual radiation and chromatic response to balance emittance, correction
+strength and damping before tracking. Do not equate a dispersion peak with
+successful hybridization. [Conventional initialization](conventional_api.md)
+remains available without imposing it as a mandatory first stage.
 
 ## Decide from measurements
 
@@ -47,7 +28,6 @@ emittance or peak dispersion. Preserve machine requirements and straight counts.
 | Low emittance, excessive sextupole demand | Co-vary site dispersion/betas and low-H bending optics; compare emittance, chromaticity and required integrated strengths. |
 | Corrected chromaticity, poor acceptance | Examine pair maps, tune footprints and detuning before adding nonlinear families. |
 | Saturated or ineffective controls | Measure response and singular values; test regrouping, relocation or geometry. |
-| Improved bend profile | Rematch the complete ring; compare I2/I4/I5, damping and acceptance under consistent constraints. |
 
 Retain alternatives; failed searches cannot prove impossibility.
 [Radiation/chromatic trade-offs](https://arxiv.org/abs/2105.14492).
@@ -65,12 +45,10 @@ Cancellation may cross a straight or cell boundary, releasing arc phase
 constraints. Do not prescribe within-cell pairing.
 [Cross-straight cancellation](https://arxiv.org/abs/2212.01870).
 
-Use actual ring periodicity and relevant resonance terms to explore phase
-neighborhoods, including symmetry breaking; do not copy facility tunes.
+Use actual ring periodicity, resonances and symmetry breaking, not facility tunes.
 [Distributed cancellation](https://proceedings.jacow.org/ipac2019/papers/moprb005.pdf).
-A measured chromatic-response QR/SVD nullspace exposes controls preserving
-chromaticities locally; re-correct after finite moves. Investigate harmonic
-families, positions or octupoles when measured detuning/resonances justify them.
+A chromatic-response QR/SVD nullspace preserves chromaticities locally;
+re-correct after finite moves. Add nonlinear controls for measured limitations.
 
 ## Joint search and trustworthy measurements
 

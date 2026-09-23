@@ -33,7 +33,12 @@ _ELEMENT_STYLE = {
 
 
 def lattice_plot_rows(elements: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Return JuTrack-style rectangular glyphs for a straight lattice view."""
+    """Return one field-aware record per element without changing its identity.
+
+    A bend's orange body and signed blue quadrupole component are separate
+    glyphs, not separate physical magnets. Heights indicate component/polarity,
+    not relative field magnitude; even a tiny nonzero angle remains a bend.
+    """
     rows: list[dict[str, Any]] = []
     cursor = 0.0
     for index, element in enumerate(elements):
@@ -49,7 +54,14 @@ def lattice_plot_rows(elements: Iterable[Mapping[str, Any]]) -> list[dict[str, A
         ).upper()
         family, color = _ELEMENT_STYLE.get(kind, (kind.title(), "#969696"))
         y0, y1 = _element_height(kind, element)
-        rows.append({
+        k1 = _quadrupole_strength(element)
+        angle = element.get("angle_rad", element.get("angle"))
+        combined = kind in {"SBEND", "RBEND", "BEND"} and k1 != 0.0
+        if combined:
+            family = "Combined-function bend" if _finite(angle, 0.0) != 0.0 else "Quadrupole (bend element)"
+            if _finite(angle, 0.0) == 0.0:
+                color = "#8ecae6"
+        row = {
             "order": index + 1,
             "name": str(element.get("name", f"E{index + 1}")),
             "type": kind,
@@ -60,11 +72,82 @@ def lattice_plot_rows(elements: Iterable[Mapping[str, Any]]) -> list[dict[str, A
             "y0": y0,
             "y1": y1,
             "color": color,
-            "k1_m-2": element.get("k1", element.get("k1_m2")),
-            "angle_rad": element.get("angle_rad"),
-        })
+            "k1_m-2": k1,
+            "angle_rad": angle,
+            "has_quadrupole_component": k1 != 0.0,
+            "has_bend_component": _finite(angle, 0.0) != 0.0,
+            "quadrupole_polarity": "positive" if k1 > 0.0 else "negative" if k1 < 0.0 else "zero",
+        }
+        # Rows may be flattened API records or saved ElementIR dictionaries.
+        # Keep segmentation provenance, but do not merge numerical slices or
+        # infer the number of physical magnets from their names.
+        fields = element.get("fields", {})
+        fields = fields if isinstance(fields, Mapping) else {}
+        for key in ("physical_magnet", "segment_index", "segment_count", "source_element", "source_period", "design_role"):
+            if key in element or key in fields:
+                row[key] = element.get(key, fields.get(key))
+        if element.get("family", fields.get("family")) is not None:
+            row["source_family"] = element.get("family", fields.get("family"))
+        row["glyph_components"] = _glyph_components(row)
+        row["y0"] = min(component["y0"] for component in row["glyph_components"])
+        row["y1"] = max(component["y1"] for component in row["glyph_components"])
+        row["tooltip"] = _magnet_tooltip(row)
+        rows.append(row)
         cursor = end
     return rows
+
+
+def _quadrupole_strength(element: Mapping[str, Any]) -> float:
+    for key in ("k1", "k1_m2", "k1_m-2"):
+        if element.get(key) is not None:
+            return _finite(element[key], 0.0)
+    fields = element.get("fields", {})
+    fields = fields if isinstance(fields, Mapping) else {}
+    polynomial = element.get("PolynomB", fields.get("PolynomB"))
+    if isinstance(polynomial, (list, tuple)) and len(polynomial) > 1:
+        return _finite(polynomial[1], 0.0)
+    return 0.0
+
+
+def _glyph_components(row: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Shared strip geometry for SVG, Matplotlib, and tabular consumers."""
+    kind = str(row.get("type", "")).upper()
+    k1 = _quadrupole_strength(row)
+    if kind in {"SBEND", "RBEND", "BEND"} and k1 != 0.0:
+        has_bend = _finite(row.get("angle_rad", row.get("angle")), 0.0) != 0.0
+        inner = 0.30 if has_bend else 0.0
+        components = ([{"component": "bend", "y0": -0.30, "y1": 0.30, "color": "#f59e0b"}]
+                      if has_bend else [])
+        components.append({
+            "component": "quadrupole",
+            "y0": inner if k1 > 0.0 else -0.78,
+            "y1": 0.78 if k1 > 0.0 else -inner,
+            "color": "#8ecae6",
+        })
+        return components
+    return [{"component": str(row.get("family", kind)).lower(),
+             "y0": _finite(row.get("y0"), -0.15),
+             "y1": _finite(row.get("y1"), 0.15),
+             "color": str(row.get("color", "#969696"))}]
+
+
+def _magnet_tooltip(row: Mapping[str, Any]) -> str:
+    parts = [f"{row.get('name', '')} ({row.get('type', '')})",
+             f"length={row.get('length_m')} m",
+             f"angle={row.get('angle_rad')} rad",
+             f"K1={_quadrupole_strength(row)} m^-2"]
+    for key in ("physical_magnet", "segment_index", "segment_count", "source_family", "design_role"):
+        if row.get(key) is not None:
+            parts.append(f"{key}={row[key]}")
+    return "; ".join(parts)
+
+
+def _needs_field_legend(rows: Iterable[Mapping[str, Any]]) -> bool:
+    return any(str(row.get("type", "")).upper() in {"SBEND", "RBEND", "BEND"}
+               and _quadrupole_strength(row) != 0.0 for row in rows)
+
+
+_FIELD_LEGEND = "Bends: orange; quadrupole component: light blue, K1 + above / - below"
 
 
 def ring_plot_rows(
@@ -261,6 +344,8 @@ def optics_lattice_plot_data(
             "dispersion_axis": "right",
             "lattice_strip": "bottom",
             "shared_longitudinal_axis": True,
+            "magnet_glyphs": "field_components",
+            "glyph_height": "component_and_polarity_not_strength",
         },
     }
 
@@ -415,6 +500,11 @@ def render_optics_lattice_svg(
         f'<line x1="{left}" y1="{strip_top + 30}" x2="{right}" y2="{strip_top + 30}" stroke="#111827" stroke-width="1.25"/>',
     ])
     glyph_scale = 27.0
+    if _needs_field_legend(lattice_rows):
+        svg.append(
+            f'<text class="field-legend" x="{left}" y="{strip_top - 9}" '
+            f'style="font-size:11px">{escape(_FIELD_LEGEND)}</text>'
+        )
     for row in lattice_rows:
         if not (_is_finite(row.get("s_start_m")) and _is_finite(row.get("s_end_m"))):
             continue
@@ -424,16 +514,18 @@ def render_optics_lattice_svg(
             continue
         x0 = x_position(float(row["s_start_m"]))
         x1 = x_position(float(row["s_end_m"]))
-        y0 = strip_top + 30.0 - _finite(row.get("y1"), 0.0) * glyph_scale
-        y1 = strip_top + 30.0 - _finite(row.get("y0"), 0.0) * glyph_scale
-        color = escape(str(row.get("color", "#969696")))
-        name = escape(str(row.get("name", "")))
-        kind = escape(str(row.get("type", "")))
-        svg.append(
-            f'<rect x="{x0:.2f}" y="{min(y0, y1):.2f}" width="{max(0.8, x1 - x0):.2f}" '
-            f'height="{max(1.2, abs(y1 - y0)):.2f}" fill="{color}" stroke="#444" stroke-width="0.45">'
-            f'<title>{name} ({kind})</title></rect>'
-        )
+        tooltip = escape(_magnet_tooltip(row))
+        for component in _glyph_components(row):
+            y0 = strip_top + 30.0 - component["y1"] * glyph_scale
+            y1 = strip_top + 30.0 - component["y0"] * glyph_scale
+            color = escape(component["color"])
+            label = escape(component["component"])
+            svg.append(
+                f'<rect data-component="{label}" x="{x0:.2f}" y="{min(y0, y1):.2f}" '
+                f'width="{max(0.8, x1 - x0):.2f}" height="{max(1.2, abs(y1 - y0)):.2f}" '
+                f'fill="{color}" stroke="#444" stroke-width="0.45">'
+                f'<title>{tooltip}; component={label}</title></rect>'
+            )
     legend_x = right - 360.0
     for offset, color, label, dashed in (
         (0.0, "#1769aa", "beta x", False),
@@ -572,6 +664,9 @@ def render_optics_lattice_matplotlib(
     )
 
     lattice_axis.axhline(0.0, color="#111827", linewidth=1.0)
+    if _needs_field_legend(lattice_rows):
+        lattice_axis.text(0.0, 1.01, _FIELD_LEGEND, transform=lattice_axis.transAxes,
+                          fontsize=8, ha="left", va="bottom")
     for row in lattice_rows:
         if not (_is_finite(row.get("s_start_m")) and _is_finite(row.get("s_end_m"))):
             continue
@@ -579,18 +674,21 @@ def render_optics_lattice_matplotlib(
             continue
         start = float(row["s_start_m"])
         end = float(row["s_end_m"])
-        y0 = _finite(row.get("y0"), -0.15)
-        y1 = _finite(row.get("y1"), 0.15)
-        lattice_axis.add_patch(
-            Rectangle(
+        for component in _glyph_components(row):
+            y0, y1 = component["y0"], component["y1"]
+            patch = Rectangle(
                 (start, min(y0, y1)),
                 max(1.0e-9, end - start),
                 max(1.0e-6, abs(y1 - y0)),
-                facecolor=str(row.get("color", "#969696")),
+                facecolor=component["color"],
                 edgecolor="#444444",
                 linewidth=0.45,
             )
-        )
+            # Retain identity on artists for downstream interactive renderers;
+            # PNG/PDF have no hover, so their component legend stays visible.
+            patch.set_gid(f"{row.get('order', '')}:{row.get('name', '')}:{component['component']}")
+            patch.set_label(_magnet_tooltip(row))
+            lattice_axis.add_patch(patch)
     lattice_axis.set_ylim(-1.05, 1.05)
     lattice_axis.set_yticks([])
     lattice_axis.set_ylabel("Lattice", rotation=0, labelpad=32, va="center")

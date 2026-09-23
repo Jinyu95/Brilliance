@@ -25,6 +25,24 @@ MAX_PROGRAM_BYTES = 128_000
 MAX_JSON_BYTES = 2_000_000
 
 
+class _InvalidUnicodeText(ValueError):
+    """Reject malformed tool text without guessing at the intended source."""
+
+
+def _utf8_bytes(text: str, field: str) -> bytes:
+    try:
+        return text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        line = text.count("\n", 0, exc.start) + 1
+        column = exc.start - text.rfind("\n", 0, exc.start)
+        raise _InvalidUnicodeText(
+            f"{field} contains an unpaired Unicode surrogate U+{ord(text[exc.start]):04X} "
+            f"at character {exc.start}, line {line}, column {column}. "
+            "No file was changed. Resend valid Unicode text; source characters "
+            "will not be silently replaced or reinterpreted."
+        ) from exc
+
+
 def _workspace() -> Path:
     root_value = str(os.environ.get("BRILLIANCE_PROJECT_ROOT", "")).strip()
     project_id = str(os.environ.get("BRILLIANCE_PROJECT_ID", "")).strip()
@@ -51,6 +69,7 @@ def _relative_workspace_path(
     required_root: str,
     suffix: str,
 ) -> Path:
+    _utf8_bytes(str(value), "path")
     raw = str(value).strip().replace("\\", "/")
     if raw.startswith("workspace/"):
         raw = raw[len("workspace/") :]
@@ -86,15 +105,16 @@ def write_research_program(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
         suffix=".py",
     )
     source = str(arguments.get("source", ""))
-    encoded = source.encode("utf-8")
     if not source.strip():
         raise ValueError("source must not be empty")
+    source = source if source.endswith("\n") else source + "\n"
+    encoded = _utf8_bytes(source, "source")
     if len(encoded) > MAX_PROGRAM_BYTES:
         raise ValueError(
             f"program is {len(encoded)} bytes; split the scientific work into smaller "
             f"stages below {MAX_PROGRAM_BYTES} bytes"
         )
-    _atomic_text_write(path, source if source.endswith("\n") else source + "\n")
+    _atomic_text_write(path, source)
 
     # Import lazily so the MCP process starts quickly and never initializes JuTrack.
     from .research_program import inspect_research_program
@@ -124,6 +144,8 @@ def replace_research_program_text(arguments: Mapping[str, Any]) -> Mapping[str, 
         raise ValueError(f"program does not exist: {path.relative_to(workspace)}")
     old = str(arguments.get("old", ""))
     new = str(arguments.get("new", ""))
+    _utf8_bytes(old, "old")
+    _utf8_bytes(new, "new")
     if not old:
         raise ValueError("old must contain the exact source text to replace")
     source = path.read_text(encoding="utf-8")
@@ -134,7 +156,8 @@ def replace_research_program_text(arguments: Mapping[str, Any]) -> Mapping[str, 
             "supply a less ambiguous edit"
         )
     updated = source.replace(old, new, 1)
-    if len(updated.encode("utf-8")) > MAX_PROGRAM_BYTES:
+    encoded = _utf8_bytes(updated, "source")
+    if len(encoded) > MAX_PROGRAM_BYTES:
         raise ValueError("edited program exceeds the source-size boundary")
     _atomic_text_write(path, updated)
 
@@ -144,9 +167,9 @@ def replace_research_program_text(arguments: Mapping[str, Any]) -> Mapping[str, 
     return {
         "saved": True,
         "path": path.relative_to(workspace).as_posix(),
-        "bytes": len(updated.encode("utf-8")),
+        "bytes": len(encoded),
         "lines": len(updated.splitlines()),
-        "sha256": hashlib.sha256(updated.encode("utf-8")).hexdigest(),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
         "preflight": inspection,
     }
 
@@ -165,14 +188,15 @@ def write_research_arguments(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError("value must be one JSON object")
     rendered = json.dumps(value, ensure_ascii=False, allow_nan=False, indent=2) + "\n"
-    if len(rendered.encode("utf-8")) > MAX_JSON_BYTES:
+    encoded = _utf8_bytes(rendered, "value")
+    if len(encoded) > MAX_JSON_BYTES:
         raise ValueError("arguments JSON exceeds the workspace-writing boundary")
     _atomic_text_write(path, rendered)
     return {
         "saved": True,
         "path": path.relative_to(workspace).as_posix(),
-        "bytes": len(rendered.encode("utf-8")),
-        "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+        "bytes": len(encoded),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
     }
 
 
@@ -244,7 +268,17 @@ def _tool_result(name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
     }
     if name not in handlers:
         raise ValueError(f"unknown Brilliance workspace tool: {name}")
-    result = handlers[name](arguments)
+    try:
+        result = handlers[name](arguments)
+    except _InvalidUnicodeText as exc:
+        # A malformed argument is a correctable tool result, not an MCP server
+        # failure. Never save lossy source or reinterpret scientific code.
+        result = {"saved": False, "error": "invalid_unicode", "message": str(exc)}
+        return {
+            "content": [{"type": "text", "text": json.dumps(result)}],
+            "structuredContent": result,
+            "isError": True,
+        }
     return {
         "content": [
             {
@@ -304,11 +338,18 @@ def _response(request: Mapping[str, Any]) -> dict[str, Any] | None:
 def main() -> int:
     """Serve newline-delimited MCP JSON-RPC on stdin/stdout."""
 
-    for line in sys.stdin:
+    # MCP is UTF-8 regardless of the Windows console code page. Codex filters
+    # inherited environment variables for MCP children; locale-decoding an en
+    # dash as GBK/surrogateescape produces U+DC93 inside otherwise valid source.
+    # Decode the wire bytes here, never try to repair the decoded source later.
+    input_stream = getattr(sys.stdin, "buffer", sys.stdin)
+    for line in input_stream:
         if not line.strip():
             continue
         request_id: Any = None
         try:
+            if isinstance(line, bytes):
+                line = line.decode("utf-8")
             request = json.loads(line)
             if not isinstance(request, Mapping):
                 raise ValueError("JSON-RPC request must be an object")
@@ -321,7 +362,9 @@ def main() -> int:
                 "error": {"code": -32000, "message": f"{type(exc).__name__}: {exc}"},
             }
         if response is not None:
-            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+            # ASCII JSON escapes preserve Unicode losslessly even if stdout is
+            # attached to a legacy-code-page wrapper (or the request is invalid).
+            sys.stdout.write(json.dumps(response, ensure_ascii=True) + "\n")
             sys.stdout.flush()
     return 0
 

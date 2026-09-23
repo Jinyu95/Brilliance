@@ -305,6 +305,132 @@ Failed construction is not a candidate to simulate. Passing is not optical feasi
 keys `bend`, `instances`, `length_m`, `angle_rad`, `mean_H_m`, `I1`, `I2`, `I3`, `I4`, `I5`,
 `I2_fraction`, `I4_fraction`, `I5_fraction`, `I5_over_I2`, and optionally `source_periods`. It does
 not have a `name` key. The decomposition is usable only when `consistency["passed"]` is true.
+`cell_fingerprint` identifies the ordered physical period used for this decomposition.
+
+## Shared region measurements and measured correction response
+
+`api.region_optics_summary(profile, elements, regions, *, bend_contributions=None)`
+summarizes supplied JuTrack samples without running a simulation. `elements` are
+`api.one_period_elements(candidate)`, and `profile` must describe that same period,
+with `s_m`, `beta_x`, `alpha_x`, `beta_y`, `Dx`, `Dpx`. Explicitly clip a full-ring
+profile to the period before calling; this helper does not infer repetitions.
+`regions` maps your optical-role labels to lists of exact element names. Include
+all desired segments of a physical bend, not a family name in place of its elements.
+There are no assumed bend counts, region layouts or shape targets.
+
+The returned `global` and `regions[label]` dictionaries contain
+`max_Dx_m`, `max_abs_Dx_m`, `max_H_x_m`, `max_beta_x_m`, `max_beta_y_m`,
+`sample_count`, `elements_without_named_samples`, and `peaks`. Each peak records
+its actual `s_m`, `source_element` when supplied/known, `Dx_m`, `Dpx`, betas and
+`H_x_m`. Maxima are **sampled maxima**, not proof of an interior stationary point.
+Use sufficient native, map-validated interior samples for that question; an
+element-exit profile cannot certify the peak inside a magnet or drift.
+At a shared edge, supply the exact `source_element` or native exit `name` to
+identify its side. Anonymous boundary samples spanning two regions are not
+assigned to either side; `excluded_ambiguous_boundary_samples` reports omissions.
+
+Pass the same candidate's `api.bend_radiation_contributions(candidate)` to obtain
+`regions[label]["radiation"]` with `I2`, `I4`, `I5` and their fractions. Integrals
+retain the supplied scope (normally full-ring totals); do not multiply again.
+No radiation is estimated from sparse optics. Exact period names, geometry and
+available fingerprints are checked. Legacy evidence without a fingerprint is
+labelled unbound; the caller still owns profile/candidate/energy provenance.
+Overlapping regions are permitted but their integrals must not be added together.
+
+Reuse this **same measurement** in the objective, candidate selection and report.
+Compare useful correction-site optics against radiation in the bending sections,
+not against an unrelated global dispersion maximum. A region summary does not
+impose a physics gate or approve the candidate.
+
+`api.measure_response(evaluate, position, *, steps, bounds)` measures a numerical
+Jacobian. The callback returns a finite vector of actual JuTrack observables in
+a fixed order, assigning every requested coordinate on a **private** lattice.
+Bounds are N pairs, steps are N positive values, in the coordinates' own units.
+Probes stay inside bounds; the baseline is re-evaluated on return or error to
+restore the private state. Results include `matrix`, baseline `position`/`values`,
+probe coordinates, rank, singular values and `baseline_repeat_difference`.
+The unscaled condition number alone is not evidence of physical uncontrollability.
+
+`api.bounded_response_correction(response, target, *, bounds, tolerance)` proposes
+**absolute coordinates**, not increments. For reachable targets it minimizes
+peak absolute coordinate divided by the corresponding bound scale, using available
+nullspace freedom. Otherwise it reports a tolerance-weighted bounded compromise.
+`within_tolerance` concerns only the **predicted linear response**; it is not a
+measured match. Apply the proposal and remeasure with JuTrack. Response step-size
+and momentum-step convergence remain the research program's responsibility.
+
+For example, inside a radiation/chromatic co-design evaluator, with the family
+indices, physical K2 bounds and measurement callback defined by that program:
+
+```python
+response = api.measure_response(
+    measure_ring_chromaticities, current_k2, steps=k2_probe_steps, bounds=k2_bounds,
+)
+correction = api.bounded_response_correction(
+    response, requested_chromaticities, bounds=k2_bounds, tolerance=xi_tolerances,
+)
+actual_xi = measure_ring_chromaticities(correction["coordinates"])
+# Retain emittance, regional H/I5, response burden and actual xi residuals
+# as distinct metrics. Neither a solver status nor a large Dx proves success.
+```
+
+Use the same energy, periodic scope, closed-orbit/momentum convention and family
+definitions for all probes and verification. These helpers work for other
+measured response problems too; they provide no replacement optics map or
+automatic topology selection.
+
+## Native radiation and chromatic co-design measurements
+
+`api.jutrack_design_metrics(jt, lattice, *, energy_gev, dp_step, periods=1,
+include_profile=True, orbit_tolerance=1e-10, max_orbit_iterations=30,
+coupling_tolerance=1e-8, check_half_step=True)` evaluates one **unchanged** native
+lattice. It returns `geometry` measured from its actual elements, `linear`,
+`radiation`, `chromaticity`, `computed`, and `acceptance="not_assessed"`.
+Use it in the objective **and** final report for ideal centred periodic lattices.
+`periods` is the number of identical repetitions of the input block; use 1 for
+an explicit ring. It does not infer periodicity or accept a design.
+
+The cheaper separate `api.jutrack_chromaticity_metrics(jt, lattice, *, energy_gev,
+dp_step, periods=1, orbit_tolerance=1e-10, max_orbit_iterations=30,
+coupling_tolerance=1e-8, check_half_step=True)` measures off-momentum closed orbits,
+verifies them with native tracking, and differentiates native-map tunes at those
+orbits. This includes sextupole feed-down; it is not a beta-times-gradient
+estimate or an off-momentum map evaluated at the origin. It assumes conservative,
+uncoupled transverse motion with RF/radiation off, and rejects coupled maps.
+The native orbit solver runs at 0.01 times the independent verification tolerance;
+`orbit_solver_tolerance` records that margin without relaxing `orbit_tolerance`.
+
+On success read `chromaticity_x`, `chromaticity_y` (identical-ring derivatives),
+`per_period_chromaticities`, `step_estimates`, `step_difference`, and `samples`
+(closed orbits, verification residuals and fractional tunes). With half-step
+checking, the reported derivative uses `dp_step/2`; assess step convergence.
+Physical measurement failures return `computed=False` and `reason`, not zero
+chromaticities. A native radiation `DomainError` preserves its diagnostic as
+unavailable radiation; it does not establish a physical cause. Runtime/API
+exceptions propagate. `computed=True` is **not**
+target satisfaction; check radiation `physical_validity`, actual chromatic
+residuals, engineering/optics limits and the selected explicit ring separately.
+
+For a measured-response callback on a private mutable lattice:
+
+```python
+def measure_ring_chromaticities(k2):
+    for indices, value in zip(family_indices, k2):
+        for index in indices:  # saved zero-based Python indices
+            lattice[index].k2 = float(value)
+    measured = api.jutrack_chromaticity_metrics(
+        jt, lattice, energy_gev=energy, periods=periods, dp_step=1e-5,
+    )
+    if not measured["computed"]:
+        raise api.ResearchInfeasible(
+            measured["reason"], code="chromaticity_unavailable", diagnostics=measured,
+        )
+    return [measured["chromaticity_x"], measured["chromaticity_y"]]
+```
+
+Pass this callback to `measure_response` above, remeasure the proposed bounded
+correction, and retain its actual residuals alongside native radiation during
+candidate selection. Numerical measurement helpers impose no layout or objectives.
 
 ## Mutable JuTrack calculations
 
@@ -321,7 +447,7 @@ API misuse, not an unstable physical lattice. The identity check precedes all mu
 jt = api.jutrack()
 editor = api.build_jutrack_editor(ring)
 # Compile indices by exact names/families once with the editor/parameterization helpers.
-metrics = api.jutrack_linear_metrics(jt, editor.lattice, include_profile=False)
+metrics = api.jutrack_linear_metrics(jt, editor.lattice, energy_gev=3.0, include_profile=False)
 # A matching/search callback can update rows and evaluate without rebuilding the lattice:
 metrics = editor.linear_metrics(updated_rows, include_profile=False)
 radiation = api.jutrack_radiation_metrics(jt, editor.lattice, energy_gev=3.0)
@@ -533,6 +659,20 @@ Without that inclusion map, BOTH length and strength vary on every eligible, unf
 Count compiled knobs, not magnet families in prose: eight quadrupole pairs with both fields
 plus eight drift pairs give 24 coordinates, not 16. Exact sum constraints project coordinates;
 the population policy conservatively counts all compiled outer coordinates.
+
+Explicit `k1_m2` knobs support `QUAD`/`KQUAD` and combined-function `SBEND`/`RBEND`.
+Default mirror inference keeps bend gradients fixed; opt in by listing the bend
+names under `included_element_names_by_field["k1_m2"]`, with declared bounds.
+Each physical dipole or LGB segment can have independent length, angle and K1
+knobs; common metadata does not require equal values. Tie only actual mirror
+partners or deliberately selected families. A zero-angle bend requires an
+explicit angle knob/bounds to acquire reverse curvature; relative inference
+skips zero. Recheck combined fields after changing lengths or angles.
+
+For `compile_lattice_parameterization(..., sum_constraints=...)`, a sum covers
+only its listed knobs, weighted by their physical multiplicities. This differs
+from the whole-lattice `exact_sum_by_field` convenience above. Overlapping sum
+ownership is rejected rather than sequentially breaking an earlier constraint.
 
 When adding bend-angle knobs to this example, include `"angle_rad": design_bend_names` in the
 inclusion map AND `"angle_rad"` in `fields`. Adding only an exact angle sum does not select any
@@ -950,7 +1090,10 @@ PDF are also supported and retain the same combined layout. Do not replace a fai
 with a beta/dispersion-only fallback: report the plotting error so the lattice is never silently
 omitted. The plotting helper takes the common longitudinal interval, so the example above clips a
 full-ring JuTrack profile to exactly the elements in one periodic cell. Use a full-ring survey only
-for geometry. Radiation studies should also save the exact
+for geometry. Combined-function bends show their bending body and signed focusing
+component, including near-zero-curvature bending quadrupoles; their stored element
+type is not changed. Numerical segments remain separate glyphs with physical-magnet
+identity where supplied. Radiation studies should also save the exact
 per-bend decomposition and its standard plot:
 
 ```python

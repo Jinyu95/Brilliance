@@ -1250,8 +1250,11 @@ async def _run_codex_turn(
             disposition = "needs_input"
             response = (
                 response.rstrip()
-                + "\n\nI paused at this scientific checkpoint so you can inspect the result or steer "
-                "the next calculation."
+                + "\n\nThe model requested another research increment, but automatic continuation "
+                "is disabled by the configured interaction policy (`auto_continue=false`). "
+                "This pause does not establish convergence or completion of the research. "
+                "Reply to continue or steer the next calculation; saved results are preserved "
+                "and already-running numerical jobs are not stopped by this chat pause."
             )
         attachments = _turn_attachments(root, project.id, started_at)
         if not response.strip():
@@ -2749,20 +2752,22 @@ def _codex_workspace_mcp_overrides(
     python = json.dumps(str(environment.python_executable))
     overrides = [
         f"mcp_servers.brilliance_workspace.command={python}",
-        'mcp_servers.brilliance_workspace.args=["-m","brilliance.workspace_mcp"]',
+        'mcp_servers.brilliance_workspace.args=["-X","utf8","-m","brilliance.workspace_mcp"]',
         "mcp_servers.brilliance_workspace.enabled=true",
         'mcp_servers.brilliance_workspace.default_tools_approval_mode="approve"',
         "mcp_servers.brilliance_workspace.startup_timeout_sec=15",
         "mcp_servers.brilliance_workspace.tool_timeout_sec=30",
     ]
+    environment_values = ['PYTHONUTF8="1"', 'PYTHONIOENCODING="utf-8"']
     if project_root is not None and project_id:
         root_value = json.dumps(str(Path(project_root).resolve()))
         project_value = json.dumps(str(project_id))
-        overrides.append(
-            "mcp_servers.brilliance_workspace.env="
-            "{BRILLIANCE_PROJECT_ROOT="
-            f"{root_value},BRILLIANCE_PROJECT_ID={project_value}}}"
+        environment_values.extend(
+            [f"BRILLIANCE_PROJECT_ROOT={root_value}", f"BRILLIANCE_PROJECT_ID={project_value}"]
         )
+    overrides.append(
+        "mcp_servers.brilliance_workspace.env={" + ",".join(environment_values) + "}"
+    )
     return tuple(overrides)
 
 

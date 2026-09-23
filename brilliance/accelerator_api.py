@@ -32,8 +32,19 @@ from .lattice_editing import (
     replace_lattice_elements,  # noqa: F401 - public expert API
     resize_inserted_element,  # noqa: F401 - public expert API
 )
+from .native_measurements import (
+    jutrack_chromaticity_metrics,  # noqa: F401 - verified native closed-orbit derivative
+    jutrack_design_metrics,  # noqa: F401 - same observables in search and reporting
+)
 from .population_optimization import read_optimization_checkpoint  # noqa: F401 - public API
+from .region_measurements import (
+    region_optics_summary,  # noqa: F401 - public measured-region summary
+)
 from .research_outcomes import ResearchInfeasible  # noqa: F401 - public scientific outcome
+from .response_analysis import (
+    bounded_response_correction,  # noqa: F401 - public measured-response correction
+    measure_response,  # noqa: F401 - public finite-difference measurement
+)
 
 
 def expert_module(module_id: str, *, registry: Any = None) -> Any:
@@ -1530,6 +1541,8 @@ def bend_radiation_contributions(
 
     ring = JuTrackService(jt).build_lattice(lattice)
     evidence = json_safe(_bend_radiation_contribution_evaluation(jt, ring, lattice))
+    from .lattice_fingerprint import cell_fingerprint
+    evidence["cell_fingerprint"] = cell_fingerprint(one_period_elements(source_candidate))
     if derived_periods is not None:
         evidence.update({
             "lattice_id": source_candidate.lattice_id,
