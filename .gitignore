@@ -34,7 +34,11 @@ research_runs*/
 /research_projects/
 
 # Local development and private post-analysis (kept on disk, not published).
-/tests/
+/tests/*
+!/tests/test_continuation_budget.py
+!/tests/test_native_continuation.py
+!/tests/test_research_handoffs.py
+!/tests/test_codex_pause.py
 /diagnostics/
 /development_archive/
 /publication_tools/

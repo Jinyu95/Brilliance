@@ -227,6 +227,7 @@ class ResearchChatService:
             payload={
                 "message": goal,
                 "initial": True,
+                "explicit_request": True,
                 "increment": 1,
                 "max_increments": configured_max_increments(),
                 "research_mode": admission.mode,
@@ -275,12 +276,12 @@ class ResearchChatService:
 
     def session_state(self, project_id: str) -> Mapping[str, Any]:
         from .codex_backends import resolve_codex_backend
-        from .native_research_agent import supports_native_research_agent
 
         workspace = self.session_workspace(project_id)
         runtime = CodexRuntimeStore(self.root, project_id).load()
         try:
-            can_pause = supports_native_research_agent(resolve_codex_backend())
+            resolve_codex_backend()
+            can_pause = True
         except (ValueError, RuntimeError):
             can_pause = False
         return {
@@ -423,10 +424,14 @@ class ResearchChatService:
                 "decision or unrecoverable blocker remains, ask one specific actionable question."
             )
             workspace.pause_file.unlink(missing_ok=True)
+            from .research_continuation import handoff_payload, pause_explanation, turn_allowance
+            allowance = turn_allowance(self.root, project_id, origin, automatic=False)
+            if not allowance["allowed"]:
+                return {"action": "needs_input", "detail": pause_explanation(allowance["reason"])}
             project = replace(project, status="researching", next_action="Resuming the latest request from saved evidence.")
             self.store.save(project)
             job = self._queue(project, action="codex_turn", payload={
-                "message": prompt, "initial": False, "increment": 1, "max_increments": 1,
+                "message": prompt, "initial": False, "explicit_request": True, **handoff_payload(allowance),
                 "research_mode": "result_review", "protocol_retry_of": failure_id,
                 "repair_request_id": origin["id"], "scientist_request": origin,
             })
@@ -468,9 +473,9 @@ class ResearchChatService:
         workspace = self.session_workspace(project_id)
         if not self.session_state(project_id)["can_pause"]:
             raise ValueError("This provider runtime does not support cooperative pause")
-        if self._active_agent_job(project_id) is None:
-            return {"paused": True, "detail": "No agent turn is active"}
         workspace.pause_file.touch()
+        if self._active_agent_job(project_id) is None:
+            return {"paused": True, "detail": "Automatic continuation is paused. Independent numerical jobs will keep running."}
         CodexRuntimeStore(self.root, project_id).update(label="Pause requested; finishing the current operation")
         return {"paused": False, "detail": "Pause requested. Independent numerical jobs will keep running."}
 
@@ -494,6 +499,7 @@ class ResearchChatService:
         project = self._load(project_id)
         if record:
             self.conversations.append_message(project.id, "user", message)
+            self.session_workspace(project.id).pause_file.unlink(missing_ok=True)
         active = self._active_codex_job(project.id)
         if active is not None:
             CodexRuntimeStore(self.root, project.id).queue_input(message)
@@ -532,13 +538,17 @@ class ResearchChatService:
         # Older inbox messages are already part of public conversation history.
         # Do not replay them after this newer user request as if they came later.
         CodexRuntimeStore(self.root, project.id).consume_pending()
-        self.session_workspace(project.id).pause_file.unlink(missing_ok=True)
+        from .research_continuation import request_started
+        from .research_recovery import scientist_request
+        origin = scientist_request(self.root, project.id)
         job = self._queue(
             project,
             action="codex_turn",
             payload={
                 "message": message,
                 "initial": False,
+                "explicit_request": record or not request_started(self.root, project.id, origin),
+                "scientist_request": origin,
                 "increment": 1,
                 "max_increments": configured_max_increments(),
                 "research_mode": admission.mode,

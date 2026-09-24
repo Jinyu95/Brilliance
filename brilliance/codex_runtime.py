@@ -170,7 +170,7 @@ class CodexTurnOutcome:
     turn_id: str | None = None
     final_response: str = ""
     disposition: str = "complete"
-    recovery: Mapping[str, str] | None = None
+    recovery: Mapping[str, Any] | None = None
     completion_evidence: Mapping[str, Any] | None = None
 
 
@@ -977,10 +977,20 @@ async def _run_provider_native_stage(
         {**dict(result.completion_evidence), "scientist_request": completion_origin,
          "completed_at": _now()} if result.completion_evidence else None)
     protocol_failure = dict(result.protocol_failure) if result.protocol_failure else None
+    # Native prose is a checkpoint until the agent makes an explicit completion
+    # decision. Keep managed jobs independent, but never override a user pause.
+    paused = session_workspace.pause_file.exists()
+    disposition = (
+        "needs_input" if paused
+        else "complete" if result.conversation_completed or result.request_satisfied or result.managed_job_id
+        else "continue" if result.continuation_needed or result.disposition == "continue"
+        else "needs_input"
+    )
     conversation.append_message(project.id, "assistant", response, attachments=attachments,
         meta={"runtime": "native_research_agent", "kind": "result",
               "request_satisfied": result.request_satisfied,
               "conversation_completed": result.conversation_completed,
+              "disposition": disposition,
               "scientist_request": completion_origin,
               "completion_evidence": completion_evidence,
               "protocol_failure": ({key: protocol_failure[key] for key in
@@ -991,10 +1001,13 @@ async def _run_provider_native_stage(
         failure = project_directory / "workspace" / "runtime_failures" / (
             "job-native-" + content_hash((started_at, result.failed_program, result.last_error)) + ".json")
         recovery = {"script": result.failed_program, "error": result.last_error,
-                    "diagnostic": str(failure), "mode": "diagnose_and_repair"}
+                    "diagnostic": str(failure), "mode": "diagnose_and_repair",
+                    "scientist_request": dict(completion_origin)}
         _write_generated_text(failure, json.dumps({"kind": "native_step_boundary", **recovery}, ensure_ascii=False))
-    status = ("complete" if result.conversation_completed or result.request_satisfied or result.managed_job_id
-              else "checkpoint" if result.continuation_needed or recovery else "paused")
+    if recovery and not paused:
+        disposition = "native_repair"
+    status = ("complete" if disposition == "complete"
+              else "checkpoint" if disposition in {"continue", "native_repair"} else "paused")
     store.update(
         status=status,
         completion_evidence=completion_evidence,
@@ -1035,7 +1048,7 @@ async def _run_provider_native_stage(
         thread_id=None,
         turn_id=f"native-agent-{content_hash((project.id, completed_at), length=16)}",
         final_response=response,
-        disposition="complete" if result.conversation_completed or result.request_satisfied or result.managed_job_id else "native_repair" if recovery else "native_continue" if result.continuation_needed else "needs_input",
+        disposition=disposition,
         recovery=recovery,
         completion_evidence=completion_evidence,
     )
@@ -1217,6 +1230,9 @@ async def _run_codex_turn(
             if control.get("kind") == "managed_expert_calculation":
                 response = _managed_job_checkpoint_message(control)
                 disposition = "complete"
+            elif control.get("kind") == "scientist_pause":
+                response = "Research is paused at your request. Saved results and independent numerical jobs are preserved."
+                disposition = "needs_input"
             else:
                 response = _operational_abort_message(control)
                 disposition = "needs_input"
@@ -1225,7 +1241,7 @@ async def _run_codex_turn(
                 project.id, "assistant", response, attachments=attachments
             )
             store.update(
-                status="complete",
+                status="complete" if disposition == "complete" else "paused",
                 partial_response="",
                 live_narrative="",
                 error="" if control.get("kind") == "managed_expert_calculation" else control.get("detail", ""),
@@ -1246,11 +1262,11 @@ async def _run_codex_turn(
         _check_completed_turn(completed)
         response = _final_response(completed) or "".join(streamed).strip()
         response, disposition = _response_disposition(response)
-        if disposition == "continue" and not configured_auto_continue():
+        if disposition in {"continue", "completion_review"} and not configured_auto_continue():
             disposition = "needs_input"
             response = (
                 response.rstrip()
-                + "\n\nThe model requested another research increment, but automatic continuation "
+                + "\n\nThe current request has not been marked complete, but automatic continuation "
                 "is disabled by the configured interaction policy (`auto_continue=false`). "
                 "This pause does not establish convergence or completion of the research. "
                 "Reply to continue or steer the next calculation; saved results are preserved "
@@ -1462,12 +1478,28 @@ async def _consume_turn_stream(
                     }
                 )
 
+    async def watch_pause() -> None:
+        nonlocal control
+        pause_file = store.project_root / store.project_id / "agent_pause.request"
+        while True:
+            if pause_file.exists():
+                control = {"kind": "scientist_pause"}
+                interrupt = getattr(handle, "interrupt", None)
+                if callable(interrupt):
+                    with suppress(Exception):
+                        await asyncio.wait_for(interrupt(), timeout=2.0)
+                return
+            await asyncio.sleep(.25)
 
     stream_task = asyncio.create_task(consume())
     heartbeat_task = asyncio.create_task(heartbeat())
     steering_task = asyncio.create_task(steer())
+    pause_task = asyncio.create_task(watch_pause())
     try:
-        done, _ = await asyncio.wait({stream_task}, timeout=timeout_seconds)
+        done, _ = await asyncio.wait({stream_task, pause_task}, timeout=timeout_seconds,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        if pause_task in done and control is not None:
+            return completed, streamed, control
         if stream_task not in done:
             interrupt = getattr(handle, "interrupt", None)
             if callable(interrupt):
@@ -1478,7 +1510,7 @@ async def _consume_turn_stream(
         await stream_task
         return completed, streamed, control
     finally:
-        tasks = (stream_task, heartbeat_task, steering_task)
+        tasks = (stream_task, heartbeat_task, steering_task, pause_task)
         for task in tasks:
             if not task.done():
                 task.cancel()
@@ -2010,7 +2042,7 @@ def _final_response(completed: Mapping[str, Any]) -> str:
 
 def _response_disposition(response: str) -> tuple[str, str]:
     matches = list(RESEARCH_STATUS_PATTERN.finditer(str(response)))
-    disposition = matches[-1].group(1).lower() if matches else "complete"
+    disposition = matches[-1].group(1).lower() if matches else "completion_review"
     cleaned = RESEARCH_STATUS_PATTERN.sub("\n", str(response)).strip()
     return cleaned, disposition
 
@@ -2818,7 +2850,14 @@ check is useful before expensive computation, but no fixed stage order is impose
 Answer conceptual questions directly. For calculations, return scientific interpretation
 with useful inline tables and figures, not only file links. Publish meaningful measured
 milestones; distinguish the current working candidate from rejected/comparison branches.
-Finish with one private brilliance-research-status marker: complete, continue, or needs_input.
+Finish with exactly one private marker in this form:
+<!-- brilliance-research-status: complete -->
+Replace complete with continue or needs_input when appropriate.
+Use continue when the current request remains unfinished and another justified step
+is available; an intermediate result or a completed reply does not finish the request.
+The controller preserves one shared request budget across turns and background jobs.
+Use complete for an answered request, including a defensible terminal negative result;
+use needs_input for a real blocker or scientist decision. Do not promise guaranteed success.
 
 Mode: {research_mode}. {network}
 
@@ -2845,8 +2884,9 @@ def _turn_prompt(
     return (
         f"{prefix}\n\nProject goal:\n{project.goal.strip()}"
         f"\n\nScientist message:\n{message.strip()}"
-        "\n\nThis is one bounded research increment. Preserve outputs and end with the required "
-        "brilliance-research-status marker."
+        "\n\nThis turn is part of the current research request. Preserve outputs and continue "
+        "useful work toward that request. At a turn boundary, use the required "
+        "brilliance-research-status marker to distinguish complete, continue, and needs_input."
     )
 
 

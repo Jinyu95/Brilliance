@@ -54,11 +54,27 @@ Ask follow-up questions, change requirements, or request comparisons and plots i
 
 Long numerical jobs can continue independently of the model conversation. Pausing the agent does not stop these jobs; use their own controls and check their state before restarting the application. Recovery depends on the numerical program's checkpoint support.
 
+Unfinished requests continue automatically by default, with a shared allowance of
+20 model turns per scientist message. Background-result reviews and recovery use
+the same allowance; they do not reset it. Configure `auto_continue` and
+`max_autonomous_increments` under `[interaction]` in `research_runtime.toml`.
+The one-hour `turn_wall_time_s` is a model-turn checkpoint, not a total research
+duration or a limit on independent numerical jobs. The agent stops when the
+request is answered, a decision or blocker needs attention, you pause it, or its
+allowance is exhausted. The existing consecutive-timeout guard also pauses a
+stalled conversation after two full model time slices. Send a new message to resume from saved work with a new
+allowance. Changing configuration does not restart paused projects.
+
 Projects are saved under `research_projects/`. Back up this directory to preserve your work. New projects, credentials and local runtime state are excluded from Git by default.
 
 ## Demonstration
 
-[MBA design demonstration](examples/mba-design/index.html) is the original browser-saved page from project-f82e15cdfbda87, unchanged, with its referenced figures, styles and script. After downloading the repository, open `examples/mba-design/index.html` in a browser. Original application controls and artifact links are preserved; they may require the original local Brilliance server and project. Full research projects, private analysis and lattice exports are not bundled.
+Two read-only snapshots of research conversations are viewable in the browser via GitHub Pages ([all examples](https://jinyu95.github.io/Brilliance/examples/index.html)):
+
+- **MBA design** — [view online](https://jinyu95.github.io/Brilliance/examples/mba-design/index.html) · [open locally](examples/mba-design/index.html): the original browser-saved page from project-f82e15cdfbda87, unchanged, with its referenced figures, styles and script. Original application controls and artifact links are preserved; they may require the original local Brilliance server and project.
+- **Space-charge study** — [view online](https://jinyu95.github.io/Brilliance/examples/space-charge/index.html) · [open locally](examples/space-charge/index.html): a coasting proton beam's space-charge tune footprint driven across the 4Qx&nbsp;=&nbsp;18 structure resonance in a fixed 1 GeV FODO ring, diagnosed with turn-by-turn emittance, phase space, and finite-time frequency-map (FMA) analysis (project-40c9bb49d1383e). Rendered from the saved transcript by `scripts/build_space_charge_example.py`.
+
+After downloading the repository you can also open either `index.html` directly in a browser. Full research projects, private analysis and lattice exports are not bundled.
 
 ## Extend
 

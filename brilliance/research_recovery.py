@@ -177,6 +177,9 @@ def program_failure_guidance(error: str) -> dict[str, str]:
 def repair_pause_explanation(recovery: Mapping[str, Any]) -> str:
     """Never leave the user with an unexplained 'repair was not started'."""
     reason = recovery.get("reason")
+    if reason in {"request_budget_exhausted", "auto_continue_disabled"}:
+        from .research_continuation import pause_explanation
+        return pause_explanation(reason)
     if reason == "repair_handoff_failed":
         reason = "handoff_failed"
     reasons = {
@@ -249,6 +252,8 @@ def schedule_result_review(root: Path, jobs: Any, job: Any, project: Any,
                            scientist_origin: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Bring completed durable evidence back to the agent, without choosing physics."""
     from .codex_runtime import CodexRuntimeStore
+    from .atomic_io import atomic_write_text
+    from .research_continuation import handoff_payload, turn_allowance
     from .research_session import SessionWorkspace
 
     native_boundary = job.action == "codex_turn" and scientist_origin is not None
@@ -265,13 +270,20 @@ def schedule_result_review(root: Path, jobs: Any, job: Any, project: Any,
     marker = records / f"{job.job_id}.json"
     if marker.exists():
         return json.loads(marker.read_text(encoding="utf-8"))
-    try:
-        limit = max(0, min(32, int(os.environ.get("BRILLIANCE_RESULT_REVIEW_LIMIT", "8"))))
-    except ValueError:
-        limit = 8
+    active = jobs.active(project.id, action="codex_turn")
+    allowance = turn_allowance(root, project.id, origin) if active is None else None
+    if allowance is not None and not allowance["allowed"]:
+        return {"scheduled": False, "reason": allowance["reason"]}
     previous = [json.loads(path.read_text(encoding="utf-8")) for path in records.glob("*.json")]
     used = sum(item.get("scientist_request_id") == origin["id"] for item in previous)
-    if used >= limit:
+    # Honor an explicitly configured legacy cap, but do not impose a second
+    # hidden eight-review budget on top of the shared request allowance.
+    legacy_limit = os.environ.get("BRILLIANCE_RESULT_REVIEW_LIMIT")
+    try:
+        legacy_limit = max(0, int(legacy_limit)) if legacy_limit is not None else None
+    except ValueError:
+        legacy_limit = None
+    if legacy_limit is not None and used >= legacy_limit:
         return {"scheduled": False, "reason": "result_review_limit"}
     if native_boundary:
         committed = _committed_saved_program(artifact, directory)
@@ -305,7 +317,7 @@ def schedule_result_review(root: Path, jobs: Any, job: Any, project: Any,
         "or relax user requirements. Do not choose a new architecture merely because a short search "
         "missed an aspiration. Do not install packages or change the configured runtime."
     )
-    record = {"scheduled": True, "scientist_request_id": origin["id"],
+    record = {"scheduled": False, "reason": "handoff_pending", "scientist_request_id": origin["id"],
               "review": used + 1, "artifact": str(artifact),
               "trigger": "native_step_boundary" if native_boundary else "durable_program_result"}
     records.mkdir(parents=True, exist_ok=True)
@@ -314,14 +326,21 @@ def schedule_result_review(root: Path, jobs: Any, job: Any, project: Any,
             json.dump(record, handle)
     except FileExistsError:
         return json.loads(marker.read_text(encoding="utf-8"))
-    if jobs.active(project.id, action="codex_turn"):
-        CodexRuntimeStore(root, project.id).queue_input(prompt)
-    else:
-        jobs.submit(project.id, project.revision, action="codex_turn", payload={
-            "message": prompt, "initial": False, "increment": 1, "max_increments": 1,
-            "research_mode": "result_review", "review_of": job.job_id, "repair_request_id": origin["id"],
-        })
-        # Queue only: the application's supervisor owns model-process launches.
+    try:
+        if active is not None:
+            CodexRuntimeStore(root, project.id).queue_input(prompt)
+        else:
+            dispatched = jobs.submit(project.id, project.revision, action="codex_turn", payload={
+                "message": prompt, "initial": False, **handoff_payload(allowance),
+                "research_mode": "result_review", "review_of": job.job_id, "repair_request_id": origin["id"],
+            })
+            if dispatched.payload.get("review_of") != job.job_id:
+                CodexRuntimeStore(root, project.id).queue_input(prompt)
+        record.update(scheduled=True, reason="")
+        atomic_write_text(marker, json.dumps(record))
+    except Exception:
+        marker.unlink(missing_ok=True)
+        raise
     return record
 
 
@@ -333,6 +352,8 @@ def schedule_coding_repair(root: Path, jobs: Any, job: Any, project: Any,
     or repair the platform. Cancellation, scope and loop guards own admission.
     """
     from .codex_runtime import CodexRuntimeStore
+    from .atomic_io import atomic_write_text
+    from .research_continuation import handoff_payload, turn_allowance
     from .research_session import SessionWorkspace
 
     if str(job.payload.get("tool_id")) not in {
@@ -356,6 +377,10 @@ def schedule_coding_repair(root: Path, jobs: Any, job: Any, project: Any,
     marker = records / f"{job.job_id}.recovery.json"
     if marker.exists():
         return json.loads(marker.read_text(encoding="utf-8"))
+    active = jobs.active(project.id, action="codex_turn")
+    allowance = turn_allowance(root, project.id, origin) if active is None else None
+    if allowance is not None and not allowance["allowed"]:
+        return {"scheduled": False, "reason": allowance["reason"]}
     previous = [json.loads(path.read_text(encoding="utf-8")) for path in records.glob("*.recovery.json")]
     attempts = [item for item in previous if item.get("scientist_request_id") == origin["id"]]
     arguments = job.payload.get("arguments", {})
@@ -433,14 +458,19 @@ def schedule_coding_repair(root: Path, jobs: Any, job: Any, project: Any,
             json.dump(record, handle, ensure_ascii=False)
     except FileExistsError:
         return json.loads(marker.read_text(encoding="utf-8"))
-    active = jobs.active(project.id, action="codex_turn")
-    if active is not None:
-        CodexRuntimeStore(root, project.id).queue_input(prompt)
-    else:
-        jobs.submit(project.id, project.revision, action="codex_turn", payload={
-            "message": prompt, "initial": False, "increment": 1, "max_increments": 1,
-            "research_mode": "research", "recovery_mode": "diagnose_and_repair", "repair_of": job.job_id,
-            "repair_request_id": origin["id"],
-        })
-        # Never inherit a numerical worker's sandbox when starting Codex.
+    try:
+        if active is not None:
+            CodexRuntimeStore(root, project.id).queue_input(prompt)
+        else:
+            dispatched = jobs.submit(project.id, project.revision, action="codex_turn", payload={
+                "message": prompt, "initial": False, **handoff_payload(allowance),
+                "research_mode": "research", "recovery_mode": "diagnose_and_repair", "repair_of": job.job_id,
+                "repair_request_id": origin["id"],
+            })
+            if dispatched.payload.get("repair_of") != job.job_id:
+                CodexRuntimeStore(root, project.id).queue_input(prompt)
+        atomic_write_text(marker, json.dumps(record))
+    except Exception:
+        marker.unlink(missing_ok=True)
+        raise
     return record

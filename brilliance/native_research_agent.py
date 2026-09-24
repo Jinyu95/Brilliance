@@ -47,6 +47,10 @@ class NativeResearchAgentError(RuntimeError):
     """Raised when the provider-native research loop cannot continue."""
 
 
+class _NativeRequestInterrupted(Exception):
+    """An unexecuted provider response was interrupted by a user pause."""
+
+
 @dataclass(frozen=True, slots=True)
 class NativeResearchAgentResult:
     response: str
@@ -60,6 +64,7 @@ class NativeResearchAgentResult:
     completion_evidence: Mapping[str, Any] | None = None
     protocol_failure: Mapping[str, Any] | None = None
     conversation_completed: bool = False
+    disposition: str = "needs_input"
 
 
 EventCallback = Callable[[Mapping[str, Any]], Awaitable[None] | None]
@@ -103,19 +108,23 @@ _TOOLS: tuple[dict[str, Any], ...] = (
         "function": {
             "name": "complete_research",
             "description": (
-                "Conclude the current conversation request with an answer. Optionally attach an "
+                "Publish an answer with an explicit decision to complete or continue the current request. Optionally attach an "
                 "exact committed execution run_id from this project, including a rejected or failed "
                 "result being explained. The receipt's execution, scientific and acceptance flags "
                 "are preserved, not promoted by this action. Include actual results and limitations. "
                 "This records the model's completion decision, not numerical certification; "
-                "it never rewrites evidence, selects a working lattice or reruns calculations."
+                "it never rewrites evidence, selects a working lattice or reruns calculations. "
+                "An unfinished checkpoint uses disposition=continue. A defensible terminal negative "
+                "result may use disposition=complete even with request_satisfied=false."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {"answer": {"type": "string"}, "evidence_run_id": {"type": "string"},
                                "request_satisfied": {"type": "boolean", "description":
                                    "Whether the original scientist request is fulfilled, not merely explained. "
-                                   "Use false for an unfinished design or recovery-only checkpoint."}},
+                                   "Use false for an unfinished design or recovery-only checkpoint."},
+                               "disposition": {"type": "string", "enum": ["complete", "continue"],
+                                   "description": "Complete when the current request is answered or a justified terminal result is reached; continue when authorized work remains with a useful next step."}},
                 "required": ["answer"],
             },
         },
@@ -944,6 +953,7 @@ async def _provider_completion(
     on_event: EventCallback | None = None,
     on_rejection: RejectionRecorder | None = None,
     budget: _ResponseBudget | None = None,
+    pause_requested: Callable[[], bool] | None = None,
 ) -> Mapping[str, Any]:
     credential = str(os.environ.get(backend.api_key_env, "")).strip()
     if backend.api_key_env and not credential:
@@ -967,6 +977,8 @@ async def _provider_completion(
     token_parameter = _TOKEN_PARAMETER_BY_BACKEND.get(backend.fingerprint, "max_tokens")
     last_error: Exception | None = None
     for _attempt in range(3):
+        if pause_requested and pause_requested():
+            raise _NativeRequestInterrupted()
         try:
             async with httpx.AsyncClient(timeout=timeout_s) as client:
                 if _native_wire_api(backend) == "responses":
@@ -1016,9 +1028,26 @@ async def _provider_completion(
                 token_parameter = "max_completion_tokens"
                 _TOKEN_PARAMETER_BY_BACKEND[backend.fingerprint] = token_parameter
                 continue
+            if exc.response.status_code in {502, 503, 504} and _attempt < 2:
+                # The response has not reached the tool executor. Retry only this
+                # inference request, retaining all previously committed tool output.
+                await _notify(on_event, {"kind": "assistant_text", "text": (
+                    f"The model provider returned HTTP {exc.response.status_code}; "
+                    f"retrying this response ({_attempt + 1}/2). Saved calculations are unchanged."
+                )})
+                await asyncio.sleep(2 ** _attempt)
+                continue
             raise NativeResearchAgentError(
                 f"{backend.name} model {backend.model!r}: HTTP {exc.response.status_code}: {detail}"
             ) from exc
+        except httpx.TransportError as exc:
+            last_error = exc
+            if _attempt < 2:
+                await _notify(on_event, {"kind": "assistant_text", "text": (
+                    f"The model connection was interrupted; retrying this response ({_attempt + 1}/2). "
+                    "Saved calculations are unchanged."
+                )})
+                await asyncio.sleep(2 ** _attempt)
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
             last_error = exc
     raise NativeResearchAgentError(
@@ -1172,7 +1201,13 @@ Background calculations survive this model turn; use their managed controls and
 completion events rather than polling. Resume unfinished authorized work from its
 preserved evidence. Ask for a decision only when one is genuinely needed.
 
-Conclude with a normal final response or complete_research(answer, evidence_run_id, request_satisfied).
+Conclude with complete_research(answer, evidence_run_id, request_satisfied, disposition).
+Use disposition=continue for an unfinished checkpoint with a justified next step.
+Use disposition=complete for an answered request, including conceptual answers and
+defensible terminal negative results. A failed first candidate or a repaired program
+is normally a checkpoint, not a reason to end authorized design work. Stop when the
+request is answered, progress is no longer justified, or a real blocker needs input;
+you are not required to manufacture a successful result. Use pause_research for blockers.
 The optional exact receipt ID attaches saved evidence, including negative results.
 Conversation completion does not certify physics or change a receipt's flags.
 Do not rerun a calculation or edit result.json merely to change those flags.
@@ -1237,6 +1272,7 @@ REQUEST-RELEVANT PUBLIC API
         lambda model_messages, model_tools: _provider_completion(
             backend, model_messages, model_tools, on_event=on_event, on_rejection=capture_rejection,
             budget=response_budget,
+            pause_requested=pause_requested,
         )
     )
     max_steps = _bounded_int(os.environ.get("BRILLIANCE_NATIVE_AGENT_STEPS"), 32, 6, 50)
@@ -1273,6 +1309,7 @@ REQUEST-RELEVANT PUBLIC API
     requested_completion: dict[str, Any] | None = None
     requested_pause = ""
     malformed_answers = 0
+    completion_reviews = 0
     execution_cache: dict[str, dict[str, Any]] = {}
     trace: list[dict[str, Any]] = []
     session_path = workspace / "agent_sessions" / f"native-{time.time_ns()}.json"
@@ -1340,13 +1377,18 @@ REQUEST-RELEVANT PUBLIC API
             answer = arguments.get("answer")
             evidence_id = arguments.get("evidence_run_id")
             satisfied = arguments.get("request_satisfied")
+            disposition = arguments.get("disposition") or ("continue" if satisfied is False else "complete")
+            if disposition not in {"complete", "continue"}:
+                return {"ok": False, "error": "disposition must be complete or continue."}
+            if disposition == "continue" and satisfied is True:
+                return {"ok": False, "error": "An unfinished request cannot be marked request_satisfied=true."}
             if satisfied is not None and not isinstance(satisfied, bool):
                 return {"ok": False, "error": "request_satisfied must be a boolean when supplied."}
             if not isinstance(answer, str) or not answer.strip():
                 return {"ok": False, "error": "Provide a nonempty answer."}
             if evidence_id is None:
                 requested_completion = {"answer": answer.strip(), "proof": None,
-                                        "request_satisfied": satisfied}
+                                        "request_satisfied": satisfied, "disposition": disposition}
                 return {"ok": True, "completion_proposed": True,
                         "instruction": "Conversation completion does not create numerical evidence."}
             evidence = completion_receipts.get(evidence_id) if isinstance(evidence_id, str) else None
@@ -1381,7 +1423,8 @@ REQUEST-RELEVANT PUBLIC API
                     handoff = "Lattice handoff: candidate archived as a branch, not selected as the working lattice. Any existing working lattice is unchanged."
                 proof["lattice_handoff"] = handoff
             requested_completion = {"answer": answer.strip() + ("\n\n" + handoff if handoff else ""),
-                                    "proof": proof, "request_satisfied": satisfied}
+                                    "proof": proof, "request_satisfied": satisfied,
+                                    "disposition": disposition}
             return {"ok": True, "completion_proposed": True, "evidence_run_id": evidence_id,
                     "instruction": "Completion will be committed after checking for newer scientist input or pause; numerical evidence is unchanged."}
         if name == "pause_research":
@@ -1663,7 +1706,7 @@ REQUEST-RELEVANT PUBLIC API
         return compact
 
     def accept_input(additional: Sequence[str] = ()) -> bool:
-        nonlocal last_receipt, requested_pause, requested_completion, malformed_answers
+        nonlocal last_receipt, requested_pause, requested_completion, malformed_answers, completion_reviews
         incoming = list(additional) + (consume_input() if consume_input else [])
         for text in incoming:
             messages.append({"role": "user", "content": text})
@@ -1673,6 +1716,7 @@ REQUEST-RELEVANT PUBLIC API
             requested_pause = ""
             requested_completion = None
             malformed_answers = 0
+            completion_reviews = 0
         return bool(incoming)
 
     def paused_result() -> NativeResearchAgentResult:
@@ -1691,7 +1735,10 @@ REQUEST-RELEVANT PUBLIC API
         await _notify(on_event, {"kind": "model_started"})
         available_tools = tuple(tool for tool in _TOOLS
             if internet_access or tool["function"]["name"] not in _WEB_TOOLS)
-        assistant = dict(await requester(messages, available_tools))
+        try:
+            assistant = dict(await requester(messages, available_tools))
+        except _NativeRequestInterrupted:
+            return paused_result()
         if pause_requested and pause_requested():
             return paused_result()
         # A request received during generation supersedes the unexecuted proposal.
@@ -1822,12 +1869,25 @@ REQUEST-RELEVANT PUBLIC API
         if assistant.get("_provider_metadata"):
             record("provider_response", assistant["_provider_metadata"])
         if not tool_calls:
+            if completion_reviews < 1 and _step + 1 < max_steps:
+                completion_reviews += 1
+                messages.append({"role": "user", "content": (
+                    "[COMPLETION_REVIEW] Your prose alone does not establish whether the CURRENT "
+                    "scientist request is finished. Reuse the saved evidence and either keep working, "
+                    "or call complete_research with disposition=complete for an answered request "
+                    "(including a conceptual answer or a justified terminal negative result), "
+                    "disposition=continue for an unfinished checkpoint with a useful next step, "
+                    "or pause_research for a real blocker requiring input. Do not repeat calculations "
+                    "or force a successful physics result merely to make a completion decision."
+                )})
+                continue
             return NativeResearchAgentResult(
                 response=content or "The model returned an empty response; saved results are preserved.",
                 execution_attempts=execution_attempts,
                 completed_executions=completed_executions,
                 request_satisfied=None,
-                conversation_completed=bool(content),
+                continuation_needed=True,
+                disposition="continue",
                 managed_job_id=managed_job_id,
                 last_error=last_error,
             )
@@ -1913,12 +1973,15 @@ REQUEST-RELEVANT PUBLIC API
             )
         if requested_completion:
             proof = dict(requested_completion["proof"]) if requested_completion["proof"] else None
-            record("request_completed", {"completion_evidence": proof})
+            finished = requested_completion["disposition"] == "complete"
+            record("request_completed" if finished else "request_checkpoint", {"completion_evidence": proof})
             return NativeResearchAgentResult(
                 response=requested_completion["answer"], execution_attempts=execution_attempts,
                 completed_executions=completed_executions,
                 request_satisfied=requested_completion["request_satisfied"],
-                conversation_completed=True,
+                conversation_completed=finished,
+                continuation_needed=not finished,
+                disposition=requested_completion["disposition"],
                 managed_job_id=managed_job_id, completion_evidence=proof,
             )
         if managed_job_id:
@@ -1934,24 +1997,19 @@ REQUEST-RELEVANT PUBLIC API
                 managed_job_id=managed_job_id,
                 last_error=last_error,
             )
-    if completed_executions and last_receipt:
-        summary = str(last_receipt.get("summary") or "A numerical checkpoint was completed.")
-        suffix = f" The latest refinement error was: {last_error}" if last_error else ""
-        return NativeResearchAgentResult(
-            response=(
-                f"{summary} The coding loop reached its {max_steps}-step boundary after "
-                f"{execution_attempts} execution attempt(s); the completed evidence is "
-                f"attached and the unfinished refinement remains saved.{suffix}"
-            ),
-            execution_attempts=execution_attempts,
-            completed_executions=completed_executions,
-            request_satisfied=False,
-            managed_job_id=managed_job_id,
-            last_error=last_error,
-            continuation_needed=not bool(last_error),
-            failed_program=last_program if last_error else "",
-        )
-    raise NativeResearchAgentError(
-        f"the research loop reached {max_steps} model/tool steps without a completed execution; "
-        "saved source and diagnostics were preserved"
+    summary = str(last_receipt.get("summary") or "Saved programs and diagnostics are preserved.")
+    suffix = f" The latest refinement error was: {last_error}" if last_error else ""
+    return NativeResearchAgentResult(
+        response=(
+            f"{summary} The coding loop reached its {max_steps}-step boundary after "
+            f"{execution_attempts} execution attempt(s); the current request remains unfinished.{suffix}"
+        ),
+        execution_attempts=execution_attempts,
+        completed_executions=completed_executions,
+        request_satisfied=False,
+        managed_job_id=managed_job_id,
+        last_error=last_error,
+        continuation_needed=not bool(last_error),
+        disposition="continue" if not last_error else "needs_input",
+        failed_program=last_program if last_error else "",
     )

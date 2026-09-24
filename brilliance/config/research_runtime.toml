@@ -51,7 +51,7 @@ codex_sandbox = "workspace-write"
 # required because each worker mutates its own JuTrack lattice. Keep Julia and
 # BLAS at one thread per worker to avoid CPU oversubscription.
 backend = "local_process"
-local_worker_processes = 8
+local_worker_processes = 16
 threads_per_worker = 1
 
 [optimization]
@@ -78,13 +78,14 @@ project_modules_enabled = true
 max_context_chars = 12000
 
 [interaction]
-# Pause after one meaningful scientific milestone so the scientist can inspect
-# results and change the next calculation. User messages sent during a turn steer
-# the live Codex turn instead of waiting for another generic "continue" cycle.
-auto_continue = false
-max_autonomous_increments = 1
+# Continue unfinished requests across model turns and background-job handoffs.
+# This is one shared model-turn budget per scientist message, not a time limit
+# on independent numerical jobs. A new scientist message grants a new budget.
+auto_continue = true
+max_autonomous_increments = 20
 turn_wall_time_s = 3600
-require_scientist_checkpoint = true
+# Legacy metadata; pauses are controlled by auto_continue and the shared budget.
+require_scientist_checkpoint = false
 max_consecutive_timeouts = 2
 
 [recovery]
