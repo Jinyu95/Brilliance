@@ -6,6 +6,11 @@ Brilliance is a conversational research assistant for accelerator physics. A lan
 
 Different model providers and expandable expert knowledge are supported. MBA lattice design is the first developed research topic; Brilliance is not restricted to lattice design. This is research software: review numerical evidence and assumptions before publication or engineering use.
 
+**No-expert ablation branch:** optional expert modules and local design guides are removed;
+JuTrack APIs, general numerical tools, execution, research state and evidence checks remain.
+Restart Brilliance and start a **new project** for this condition. Existing demos are
+preserved, not converted into no-expert runs. See [ablation notes](docs/NO_EXPERT_ABLATION.md).
+
 ## Install
 
 Requirements: Git, Python 3.10 or newer, and a supported model backend. Setup installs dependencies and configures Julia (1.10 or newer) and the bundled JuTrack integration. Initial setup needs network access and may take several minutes.
@@ -62,6 +67,9 @@ Projects are saved under `research_projects/`. Back up this directory to preserv
 
 ## Extend
 
-Add an `EXPERT.md` under `expert_modules/<topic>/` to provide research knowledge. Optional Python tools expose reusable operations. See the [expert authoring guide](docs/EXPERT_AUTHORING_GUIDE.md) and [architecture overview](docs/ARCHITECTURE_CODEX.md).
+The full application supports `EXPERT.md` modules and optional Python tools. This
+branch disables their discovery with `[experts].enabled = false`; leave it disabled
+for the no-expert benchmark. See the [expert authoring guide](docs/EXPERT_AUTHORING_GUIDE.md)
+and [architecture overview](docs/ARCHITECTURE_CODEX.md) for the extension interface.
 
 JuTrack supplies the simulation engine; the model chooses and writes the research program. Saved candidates and numerical evidence, not model prose alone, establish what was calculated.

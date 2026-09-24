@@ -74,6 +74,7 @@ class ResearchEnvironment:
     repair_max_attempts: int = 12
     repair_max_same_error: int = 3
     max_consecutive_timeouts: int = 2
+    expert_modules_enabled: bool = True
 
     @classmethod
     def load(
@@ -170,6 +171,7 @@ class ResearchEnvironment:
                 _resolve(root, str(item)) for item in experts.get("paths", ("expert_modules",))
             ),
             expert_strict=bool(experts.get("strict", True)),
+            expert_modules_enabled=bool(experts.get("enabled", True)),
             project_expert_modules_enabled=bool(experts.get("project_modules_enabled", True)),
             expert_max_context_chars=int(experts.get("max_context_chars", 12_000)),
             auto_continue=bool(interaction.get("auto_continue", False)),
@@ -332,7 +334,10 @@ class ResearchEnvironment:
                 "BRILLIANCE_INTERNET_ACCESS": ("true" if self.internet_access else "false"),
                 "BRILLIANCE_LOCAL_MCP": ("true" if self.local_mcp_enabled else "false"),
                 "BRILLIANCE_REMOTE_MCP": ("true" if self.remote_mcp_enabled else "false"),
-                "BRILLIANCE_EXPERT_PATH": os.pathsep.join(str(item) for item in self.expert_paths),
+                "BRILLIANCE_EXPERT_PATH": (
+                    os.pathsep.join(str(item) for item in self.expert_paths)
+                    if self.expert_modules_enabled else ""
+                ),
                 "JULIA_NUM_THREADS": str(self.threads_per_worker),
                 "OPENBLAS_NUM_THREADS": str(self.threads_per_worker),
                 "OMP_NUM_THREADS": str(self.threads_per_worker),
@@ -541,6 +546,7 @@ class ResearchEnvironment:
                 "remote_http_enabled": self.remote_mcp_enabled,
             },
             "experts": {
+                "enabled": self.expert_modules_enabled,
                 "paths": [str(item) for item in self.expert_paths],
                 "strict": self.expert_strict,
                 "project_modules_enabled": self.project_expert_modules_enabled,

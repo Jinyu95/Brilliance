@@ -69,12 +69,12 @@ local_stdio_enabled = true
 remote_http_enabled = true
 
 [experts]
-# Add EXPERT.md knowledge modules under these roots. Optional typed tools.py files
-# may expose small reusable primitives. Project-local modules under
-# workspace/experts are also read.
-paths = ["expert_modules"]
+# No-expert ablation: retain built-in execution/API/evidence infrastructure, but
+# do not discover optional modules from any repository, environment or project root.
+enabled = false
+paths = []
 strict = true
-project_modules_enabled = true
+project_modules_enabled = false
 max_context_chars = 12000
 
 [interaction]

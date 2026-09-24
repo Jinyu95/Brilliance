@@ -89,24 +89,30 @@ class ExpertRegistry:
         configured_roots: Sequence[Path | str] = (),
         project_directory: Path | str | None = None,
         strict: bool = True,
+        include_optional_modules: bool = True,
     ) -> "ExpertRegistry":
         root = Path(source_root or Path(__file__).resolve().parents[2]).resolve()
         sources: list[Path] = []
         builtin = root / "brilliance" / "resources" / "expert.toml"
         if builtin.is_file():
             sources.append(builtin)
-        roots = [Path(item).expanduser() for item in configured_roots]
-        if not roots:
-            roots.append(root / "expert_modules")
-        environment_paths = str(os.environ.get("BRILLIANCE_EXPERT_PATH", "")).strip()
-        if environment_paths:
-            roots.extend(Path(item).expanduser() for item in environment_paths.split(os.pathsep))
-        if project_directory is not None:
-            project = Path(project_directory).resolve()
-            roots.extend([project / "experts", project / "workspace" / "experts"])
-        for candidate in roots:
-            resolved = candidate if candidate.is_absolute() else root / candidate
-            sources.extend(_expert_paths(resolved.resolve()))
+        # The builtin module owns the ordinary and durable program executors;
+        # disabling specialist knowledge must not disable those core tools.
+        # Guard every optional source, including the empty-roots fallback and
+        # inherited environment paths, before loading any optional Python code.
+        if include_optional_modules:
+            roots = [Path(item).expanduser() for item in configured_roots]
+            if not roots:
+                roots.append(root / "expert_modules")
+            environment_paths = str(os.environ.get("BRILLIANCE_EXPERT_PATH", "")).strip()
+            if environment_paths:
+                roots.extend(Path(item).expanduser() for item in environment_paths.split(os.pathsep))
+            if project_directory is not None:
+                project = Path(project_directory).resolve()
+                roots.extend([project / "experts", project / "workspace" / "experts"])
+            for candidate in roots:
+                resolved = candidate if candidate.is_absolute() else root / candidate
+                sources.extend(_expert_paths(resolved.resolve()))
         modules: list[ExpertModule] = []
         issues: list[str] = []
         seen_paths: set[Path] = set()
@@ -140,6 +146,7 @@ class ExpertRegistry:
                 else None
             ),
             strict=bool(getattr(environment, "expert_strict", True)),
+            include_optional_modules=bool(getattr(environment, "expert_modules_enabled", True)),
         )
 
     @classmethod

@@ -1,12 +1,8 @@
-# Accelerator research references
+# JuTrack API reference
 
-This directory intentionally contains only the compact, human-auditable source
-documents used by the research runtime:
+This no-expert branch retains `pyjutrack_api_reference.md` and removes the
+accelerator-design knowledge document. The configured native wrapper also supplies
+the generated `workspace/JUTRACK_API_REFERENCE.md` and focused API help.
 
-- `accelerator_physics_design.md` for accelerator-design conventions and
-  traceable local evidence;
-- `pyjutrack_api_reference.md` for the supported JuTrack Python surface.
-
-The runtime searches these sources directly. Generated indexes and graph
-visualizations are not stored, so derived data cannot silently diverge from the
-text supplied to the research agent.
+General numerical APIs, execution instructions, research state and scientific
+evidence checks remain available; no task-specific design recipe is installed.
