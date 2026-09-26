@@ -64,6 +64,7 @@ class KnowledgeAsset:
     summary: str
     tags: tuple[str, ...] = ()
     priority: int = 50
+    context_references: tuple[Path, ...] = ()
 
     @classmethod
     def from_dict(cls, root: Path, value: Mapping[str, Any]) -> "KnowledgeAsset":
@@ -83,21 +84,45 @@ class KnowledgeAsset:
         summary = str(value.get("summary", "")).strip()
         if not title or not summary:
             raise ExpertModuleError(f"knowledge {asset_id!r} needs title and summary")
+        path = _contained_file(root, value.get("path"), f"knowledge {asset_id} path")
+        references = value.get("context_references", ())
+        if not isinstance(references, (list, tuple)):
+            raise ExpertModuleError(
+                f"knowledge {asset_id!r} context_references must be a list of relative Markdown paths"
+            )
+        context_references: list[Path] = []
+        for relative in references:
+            reference = _contained_file(
+                root, relative, f"knowledge {asset_id} context reference"
+            )
+            if reference.suffix.casefold() != ".md":
+                raise ExpertModuleError(
+                    f"knowledge {asset_id!r} context references must be Markdown files: {relative}"
+                )
+            if reference == path:
+                raise ExpertModuleError(
+                    f"knowledge {asset_id!r} cannot include its primary source as a context reference"
+                )
+            if reference not in context_references:
+                context_references.append(reference)
         return cls(
             id=asset_id,
             title=title,
-            path=_contained_file(root, value.get("path"), f"knowledge {asset_id} path"),
+            path=path,
             kind=kind,
             status=status,
             summary=summary,
             tags=tuple(str(item).strip().lower() for item in value.get("tags", ()) if str(item).strip()),
             priority=priority,
+            context_references=tuple(context_references),
         )
 
     def as_dict(self, root: Path) -> dict[str, Any]:
         return {
             **json_safe(asdict(self)),
             "path": self.path.relative_to(root).as_posix(),
+            "context_references": [path.relative_to(root).as_posix()
+                                   for path in self.context_references],
         }
 
 

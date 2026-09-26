@@ -91,7 +91,7 @@ beta/alpha/Dx/Dpx as shared unknowns; use JuTrack propagation for continuity,
 achromatic user straights and complete-block periodicity.
 Inner matching and outer search own disjoint coordinates; evaluate returned matched elements.
 Rematch after geometry changes; changing strengths alone cannot relocate correction regions.
-Inspect site Dx/Dpx/betas and non-bump H/I5; suppress secondary humps.
+Inspect site Dx/Dpx/betas and non-bump maximum absolute Dx and H/I5; suppress secondary humps.
 Fixed bump-height/beta targets are aids, not substitutes for measured correctability.
 
 ## 4. Verify the actual search freedoms and objective
@@ -145,6 +145,8 @@ Examine two-plane correction-pair maps, not just report phase advances afterward
 Keep independent nonlinear families despite reflected linear geometry.
 Do not force identical nonlinear strengths in both insertions.
 Chromatic correction does not prove nonlinear acceptance; track corrected alternatives.
+Use [injection-based targets](injection_acceptance.md) for both transverse planes;
+scan beyond them and retain these targets when optimizing momentum acceptance.
 [Cross-straight pairing](https://arxiv.org/abs/2212.01870).
 
 Save exact candidates, solver termination and integration settings before reporting;

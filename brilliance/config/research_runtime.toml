@@ -81,6 +81,7 @@ max_context_chars = 12000
 # Continue unfinished requests across model turns and background-job handoffs.
 # This is one shared model-turn budget per scientist message, not a time limit
 # on independent numerical jobs. A new scientist message grants a new budget.
+# One additional reporting-only turn closes an exhausted request after compute.
 auto_continue = true
 max_autonomous_increments = 20
 turn_wall_time_s = 3600

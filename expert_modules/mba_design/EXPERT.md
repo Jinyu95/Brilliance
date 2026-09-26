@@ -4,11 +4,12 @@ title: MBA physics references and measurements
 summary: Concise MBA design knowledge and optional JuTrack-backed diagnostics; no prescribed design controller.
 domains: [mba, lattice design, electron storage rings, synchrotron light sources]
 authors: [Brilliance project team (draft maintainer)]
-tags: [mba, 5ba, 6ba, 7ba, 9ba, tme, modified-tme, hybrid-mba, emittance, chromatic, sextupole, matching, radiation, optimization, jutrack, superperiod, superperiods, super-periodic, ultralow-emittance, sub-10]
-version: 3.14.0
+tags: [mba, hmba, h7ba, modified-h7ba, 5ba, 6ba, 7ba, 9ba, tme, modified-tme, hybrid-mba, emittance, chromatic, sextupole, matching, radiation, optimization, jutrack, superperiod, superperiods, super-periodic, ultralow-emittance, sub-10]
+version: 3.15.1
 status: draft
 knowledge_status: draft
 kind: method
+context_references: [references/hmba_outcome_api.md, references/injection_acceptance.md]
 enabled: true
 ---
 
@@ -16,10 +17,13 @@ enabled: true
 
 Use configured JuTrack and general numerical tools in project-local code,
 not fixed sequences or installed lattices.
+Use these notes as starting points; search primary literature for technology
+parameters and uncertain physics, cite it, and choose methods from the evidence.
 
 | Question | Reference |
 | --- | --- |
 | Conventional HMBA design? | [Established HMBA](references/hmba_outcome_api.md) |
+| Injection-based acceptance? | [Injection essentials](references/injection_acceptance.md) |
 | Sub-10-pm and superperiod design? | [Layout and optics exploration](references/very_low_emittance.md) |
 | Conventional MBA initialization? | [Optional TME-derived recipe](references/conventional_api.md) |
 | TME normalization? | [Analytical references](references/physics_reference_api.md) |

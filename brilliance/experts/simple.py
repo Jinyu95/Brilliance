@@ -95,6 +95,7 @@ def compile_simple_module(path: Path | str) -> ExpertModule:
         "summary": summary,
         "tags": tags,
         "priority": int(metadata.get("priority", 80)),
+        "context_references": metadata.get("context_references", ()),
     })
     enabled = _boolean(metadata.get("enabled", True))
     # Disabled/deprecated modules must not execute Python during discovery.

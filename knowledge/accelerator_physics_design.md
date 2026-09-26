@@ -190,6 +190,9 @@ where μ_cell is the phase advance per cell.
 
 ## Design Workflow for a 4th-Generation Light Source
 
+See the maintained [HMBA](../expert_modules/mba_design/references/hmba_outcome_api.md)
+and [injection](../expert_modules/mba_design/references/injection_acceptance.md) notes.
+
 ### Stage 1: Linear Lattice Design
 
 1. Choose energy based on photon requirements (soft X-ray: 2–3 GeV,
@@ -201,7 +204,8 @@ where μ_cell is the phase advance per cell.
    b. Design the central arc to approach TME conditions.
    c. Add matching sections to zero dispersion at ID straights.
    d. Match Twiss functions at straights for desired β functions.
-4. Verify: emittance, tunes, chromaticity, beta functions, dispersion.
+4. Verify emittance, tunes, chromaticity, beta functions and dispersion; include
+   measured bounded chromatic-correction feasibility before expensive tracking.
 
 ### Stage 2: Chromaticity Correction and Sextupole Optimization
 
@@ -215,19 +219,20 @@ where μ_cell is the phase advance per cell.
 
 1. Track particles for ~1000 turns with varying initial amplitudes.
 2. Map DA in (x, y) space at injection point.
-3. Target: DA > 2–3 mm in x for off-axis injection; or > 0.5 mm for on-axis.
-4. Scan off-momentum DA at δ = ±3% or more for Touschek lifetime.
+3. Derive horizontal and vertical targets from the injection scheme, incoming
+   beam and launch optics; no universal millimetre threshold applies.
+4. Evaluate off-momentum DA and ring-local momentum acceptance for the requested
+   capture and lifetime targets.
 5. Optimize with multi-objective algorithms (MOGA, particle swarm, etc.).
 
 ### Stage 4: Injection Scheme
 
-- Off-axis injection (pulsed bump): needs DA > ~3 mm horizontally.
-- On-axis injection (pulsed multipole or swap-out): relaxes DA requirement
-  but needs fast kickers.
-- Swap-out injection: extract stored bunch, inject fresh one — needs
-  excellent kicker reproducibility.
-- Longitudinal injection: uses large energy offset → needs momentum
-  acceptance > 3%.
+Choose the injection scenario before setting DA targets; verify capture after
+nonlinear tuning. Off-axis bump or nonlinear-kicker injection must accommodate
+septum separation and incoming beam size. On-axis swap-out removes the large
+centroid offset but still needs finite beam acceptance and accurate kicks.
+Longitudinal injection requires scheme-specific energy/phase acceptance and RF
+capture. Consult primary sources for applicable technology and beam parameters.
 
 ### Stage 5: Collective Effects and Impedance
 

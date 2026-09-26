@@ -15,6 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import quote
+from uuid import uuid4
 
 from .agent_tools import AgentEvidenceStore, render_agent_artifact
 from .artifacts import content_hash
@@ -52,7 +53,6 @@ from .presentation import (
     compact_operational_messages,
     deduplicate_chat_attachments,
     final_result_text,
-    markdown_report,
     project_key_metrics,
     summarize_rejected_stage,
     summarize_stage,
@@ -253,6 +253,87 @@ class ResearchChatService:
                 "Send your next instruction here; numerical continuation uses saved campaign checkpoints, not process memory.",
                 meta={"checkpoint_branch": True})
             return {"project": self._project_meta(project), "action": "checkpoint_branch"}
+
+    def continue_checkpoint(self, project_id: str, checkpoint_id: str, *,
+                            request_id: str) -> Mapping[str, Any]:
+        """Fork the selected saved state and queue its next turn exactly once.
+
+        The click is an operational instruction. It does not manufacture a new
+        user message or substitute the source project's later failed state.
+        """
+        from .atomic_io import atomic_write_text
+        from .conversation_checkpoints import ConversationCheckpoints
+        from .research_recovery import scientist_request
+
+        if not re.fullmatch(r"project-[A-Za-z0-9_-]+", project_id):
+            raise ValueError("Invalid project identifier")
+        if not re.fullmatch(r"[0-9]+-[0-9a-f]+", checkpoint_id):
+            raise ValueError("Invalid conversation checkpoint identifier")
+        if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
+            raise ValueError("A valid continuation request identifier is required")
+        with self._command_lock, self._protocol_action_lock(project_id):
+            receipt_path = (self.root / project_id / "codex" / "checkpoint_actions" /
+                            (content_hash(request_id) + ".json"))
+            if receipt_path.exists():
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                if (receipt.get("source_project") != project_id or
+                        receipt.get("source_checkpoint") != checkpoint_id):
+                    raise ValueError("This continuation request belongs to a different checkpoint")
+            else:
+                receipt = {"source_project": project_id, "source_checkpoint": checkpoint_id,
+                           "branch_project": "project-" + uuid4().hex[:14]}
+                # Reserve the destination before copying so a lost HTTP response
+                # or process restart cannot create another branch for this click.
+                atomic_write_text(receipt_path, json.dumps(receipt, indent=2))
+            branch_id = receipt.get("branch_project", "")
+            if not isinstance(branch_id, str) or not re.fullmatch(r"project-[A-Za-z0-9_-]+", branch_id):
+                raise ValueError("Invalid saved continuation destination")
+            project = self.store.load(branch_id)
+            if project is None:
+                project = ConversationCheckpoints(self.root).fork(
+                    project_id, checkpoint_id, continuation=True, new_id=branch_id)
+            prior = next((job for job in self.jobs.list(branch_id)
+                          if job.payload.get("checkpoint_continuation_id") == request_id), None)
+            if prior is not None:
+                # A job may have committed just before the response was lost.
+                # Recover an unclaimed launch, never submit a second model turn.
+                self.jobs.recover(branch_id)
+                job = self.jobs.load(branch_id, prior.job_id) or prior
+            else:
+                origin = scientist_request(self.root, branch_id)
+                if not origin:
+                    raise ValueError("This checkpoint has no saved scientist request to continue")
+                prompt = (
+                    "Continue the scientist's research from this selected conversation checkpoint. "
+                    "This is an internal continuation handoff authorized by the scientist's click, "
+                    "not a new scientific request.\n"
+                    f"Latest scientist request: {origin['content']}\n"
+                    "The conversation and scientific files are restored in the current workspace. "
+                    "Read saved results and optimizer checkpoints to choose the next justified step; "
+                    "do not repeat completed calculations just to recover context. Preserve the "
+                    "original scientific requirements and subsequent instructions. Running processes "
+                    "and provider sessions were not copied: do not claim that pending computations "
+                    "finished, replay archived job commands, or control jobs in the original project. "
+                    "Use the current project workspace for all new work; adapt any old absolute paths "
+                    "before executing saved programs. Continue with substantive scientific progress "
+                    "without a restart announcement or repeated introduction. If the saved evidence "
+                    "already fulfills the request, provide its readable final report."
+                )
+                project = replace(project, revision=project.revision + 1, status="researching",
+                                  next_action="Continuing research from the selected saved results.")
+                self.store.save(project)
+                job = self._queue(project, action="codex_turn", payload={
+                    "message": prompt, "initial": False, "explicit_request": True,
+                    "scientist_request": origin, "increment": 1,
+                    "max_increments": configured_max_increments(),
+                    "research_mode": "result_review", "checkpoint_continuation": True,
+                    "checkpoint_continuation_id": request_id,
+                    "source_checkpoint": checkpoint_id,
+                })
+            atomic_write_text(receipt_path, json.dumps({**receipt, "job_id": job.job_id}, indent=2))
+            return {"action": "checkpoint_continue", "project": self._project_meta(self._load(branch_id)),
+                    "job": _job_meta(job), "already_started": prior is not None,
+                    "continuation": {"source_project": project_id, "source_checkpoint": checkpoint_id}}
 
     def snapshot(self, project_id: str) -> Mapping[str, Any]:
         project = self._load(project_id)
@@ -739,7 +820,12 @@ class ResearchChatService:
         return resolve_workspace_artifact(self.root, project_id, relative_path)
 
     def report(self, project_id: str) -> str:
-        return markdown_report(self._load(project_id))
+        from .research_reporting import saved_report
+        self._load(project_id)
+        report = saved_report(self.root, project_id)
+        if not report:
+            raise LookupError("The research model has not completed a scientific report for this request.")
+        return report
 
     def version(self, project_id: str) -> str:
         project_dir = self.root / project_id
@@ -1073,13 +1159,15 @@ class ResearchChatService:
                         False,
                     )
                 )
-            attachments.append(
-                {
-                    "type": "download",
-                    "title": "Download scientific report",
-                    "url": f"/api/projects/{project.id}/report",
-                }
-            )
+            from .research_reporting import saved_report
+            if saved_report(self.root, project.id):
+                attachments.append(
+                    {
+                        "type": "download",
+                        "title": "Download scientific report",
+                        "url": f"/api/projects/{project.id}/report",
+                    }
+                )
             if project.active_lattice_id:
                 attachments.extend(
                     _lattice_download_attachments(project.id, project.active_lattice_id)
@@ -1184,7 +1272,7 @@ class ResearchChatService:
     def _project_meta(self, project: ResearchProject) -> Mapping[str, Any]:
         accepted = sum(task.status == "accepted" for task in project.tasks)
         current = next((task for task in project.tasks if task.id == project.current_task_id), None)
-        return {
+        meta = {
             "id": project.id,
             "title": project.title,
             "goal": project.goal,
@@ -1207,6 +1295,18 @@ class ResearchChatService:
                 else None
             ),
         }
+        origin_path = self.root / project.id / "workspace" / "RESTORED_CHECKPOINT.json"
+        try:
+            if origin_path.stat().st_size <= 4 * 1024 * 1024:
+                origin = json.loads(origin_path.read_text(encoding="utf-8"))
+                if (isinstance(origin, dict) and
+                        re.fullmatch(r"project-[A-Za-z0-9_-]+", str(origin.get("source_project", ""))) and
+                        re.fullmatch(r"[0-9]+-[0-9a-f]+", str(origin.get("source_checkpoint", "")))):
+                    meta["checkpoint_origin"] = {key: origin[key]
+                                                 for key in ("source_project", "source_checkpoint")}
+        except (OSError, ValueError):
+            pass
+        return meta
 
     @staticmethod
     def _research_network_meta() -> Mapping[str, Any]:

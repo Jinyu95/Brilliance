@@ -1,6 +1,7 @@
 """Bounded handoff of background results and coding failures to the research agent."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -210,20 +211,110 @@ def repair_pause_explanation(recovery: Mapping[str, Any]) -> str:
                        "saved diagnostic before retrying; no further calculation was started.")
 
 
+def _restored_checkpoint(directory: Path) -> dict[str, Any]:
+    """Read branch provenance without consulting the original project files."""
+    value = json.loads((directory / "workspace" / "RESTORED_CHECKPOINT.json").read_text(encoding="utf-8"))
+    if not isinstance(value, dict) or Path(str(value.get("branch_directory", ""))).resolve() != directory.resolve():
+        raise ValueError("Restored checkpoint does not belong to this branch")
+    return value
+
+
+def restored_workspace_path(directory: Path, value: str, *, origin: Mapping[str, Any] | None = None) -> Path:
+    """Translate an archived absolute path into this branch, never its ancestor.
+
+    Only declared source directories may be translated. Containment is checked
+    after translation so neither '..' nor a local symlink can escape the copy.
+    """
+    directory = directory.resolve()
+    workspace = (directory / "workspace").resolve()
+    path = Path(value)
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("Expected an absolute, contained archived path")
+    if path.is_relative_to(directory):
+        translated = path.resolve()
+    else:
+        provenance = origin if origin is not None else _restored_checkpoint(directory)
+        translated = None
+        for source in provenance.get("source_chain", []):
+            if not isinstance(source, Mapping):
+                continue
+            source_directory = Path(str(source.get("directory", "")))
+            source_id = str(source.get("project_id", ""))
+            if (not source_directory.is_absolute() or ".." in source_directory.parts
+                    or source_directory.name != source_id
+                    or not re.fullmatch(r"project-[A-Za-z0-9_-]+", source_id)):
+                continue
+            # Lexical comparison deliberately avoids opening ancestor files.
+            if path.is_relative_to(source_directory):
+                translated = (directory / path.relative_to(source_directory)).resolve()
+                break
+        if translated is None:
+            raise ValueError("Archived path does not belong to a saved ancestor")
+    translated.relative_to(workspace)
+    return translated
+
+
+def _restored_execution(value: dict[str, Any], path: Path, directory: Path,
+                        raw: bytes) -> dict[str, Any]:
+    """Normalize copied receipt references in memory; retain immutable evidence."""
+    origin = _restored_checkpoint(directory)
+    relative = path.relative_to(directory).as_posix()
+    expected = origin.get("restored_file_sha256", {}).get(relative)
+    if not expected or hashlib.sha256(raw).hexdigest() != expected:
+        raise ValueError("Receipt was not copied intact from the selected checkpoint")
+    source_id = value.get("project_id")
+    if source_id not in {item.get("project_id") for item in origin.get("source_chain", [])
+                         if isinstance(item, Mapping)}:
+        raise ValueError("Receipt does not belong to a saved ancestor")
+
+    def local_path(raw_path: Any, *, base: Path = directory) -> str:
+        candidate = Path(str(raw_path))
+        if not candidate.is_absolute():
+            candidate = base / candidate
+        return str(restored_workspace_path(directory, str(candidate), origin=origin))
+
+    result = value["result"]
+    program = result["program"]
+    program["snapshot"] = local_path(program.get("snapshot", ""))
+    if program.get("source") and Path(str(program["source"])).is_absolute():
+        program["source"] = local_path(program["source"])
+    output = result.get("output_directory")
+    if output:
+        result["output_directory"] = local_path(output)
+    output_directory = Path(result.get("output_directory") or directory / "workspace")
+    for name in ("lattice_json", "evaluation_summary"):
+        artifacts = result.get("artifacts", {})
+        if artifacts.get(name):
+            artifacts[name] = local_path(artifacts[name], base=output_directory)
+    report = result.get("result", {})
+    if report.get("candidate_lattice") and Path(str(report["candidate_lattice"])).is_absolute():
+        report["candidate_lattice"] = local_path(report["candidate_lattice"])
+    for name in ("plots", "downloads"):
+        for item in report.get(name, []):
+            if isinstance(item, dict) and item.get("path") and Path(str(item["path"])).is_absolute():
+                item["path"] = local_path(item["path"])
+    value["artifact"] = str(path)
+    value["source_project_id"] = source_id
+    value["project_id"] = directory.name
+    return value
+
+
 def _committed_saved_program(path: Path, directory: Path) -> dict[str, Any] | None:
     """Read only a validated, archived saved-program execution in this project."""
     try:
+        directory = directory.resolve()
         resolved = path.resolve()
         resolved.relative_to((directory / "workspace" / "artifacts").resolve())
         if not resolved.name.startswith("expert-execution-") or resolved.suffix != ".json":
             return None
-        value = json.loads(resolved.read_text(encoding="utf-8"))
+        raw = resolved.read_bytes()
+        value = json.loads(raw.decode("utf-8"))
         if value.get("tool_id") not in {
             "accelerator.run_research_program", "accelerator.run_long_research_program"
         } or value.get("validation", {}).get("passed") is not True:
             return None
         if value.get("project_id", directory.name) != directory.name:
-            return None
+            value = _restored_execution(value, resolved, directory, raw)
         program = value.get("result", {}).get("program", {})
         snapshot = Path(str(program.get("snapshot", "")))
         if not snapshot.is_absolute():
@@ -231,8 +322,10 @@ def _committed_saved_program(path: Path, directory: Path) -> dict[str, Any] | No
         snapshot.resolve().relative_to((directory / "workspace").resolve())
         if not program.get("sha256") or not snapshot.is_file():
             return None
+        if hashlib.sha256(snapshot.read_bytes()).hexdigest() != program["sha256"]:
+            return None
         return value
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (OSError, ValueError, TypeError, AttributeError, KeyError):
         return None
 
 
@@ -273,6 +366,9 @@ def schedule_result_review(root: Path, jobs: Any, job: Any, project: Any,
     active = jobs.active(project.id, action="codex_turn")
     allowance = turn_allowance(root, project.id, origin) if active is None else None
     if allowance is not None and not allowance["allowed"]:
+        if allowance["reason"] == "request_budget_exhausted":
+            from .research_reporting import schedule_final_report
+            return schedule_final_report(root, jobs, project, origin, allowance["reason"])
         return {"scheduled": False, "reason": allowance["reason"]}
     previous = [json.loads(path.read_text(encoding="utf-8")) for path in records.glob("*.json")]
     used = sum(item.get("scientist_request_id") == origin["id"] for item in previous)
@@ -308,7 +404,11 @@ def schedule_result_review(root: Path, jobs: Any, job: Any, project: Any,
         f"Program declared request_satisfied={report.get('request_satisfied')}; "
         f"validation={execution.get('validation', {})}\n"
         "Use the saved project evidence and existing artifacts. Explain the actual numerical "
-        "result, its meaning, and limitations in chat. Do not rerun a completed calculation just "
+        "result, its meaning, and limitations in chat before launching another calculation. "
+        "Publish a concise milestone with key measurements and units, comparison to the original "
+        "requirements, failed or untested checks, and why the next step is justified. "
+        "Automatic stdout/JSON publication is raw evidence, not that interpretation. "
+        "Do not rerun a completed calculation just "
         "to read its result. Check the scope: a component or seed is not the requested complete "
         "system. If work within the original request remains, perform the next justified step; "
         "if the request is answered, give the final answer. If a scientific decision is needed, "

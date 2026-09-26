@@ -436,7 +436,7 @@ def _run_claimed_research_job(root, project_store, jobs, job) -> ResearchJob:
         return _run_managed_expert_job(root, project_store, jobs, job, project)
     if job.action == "codex_turn":
         from .research_recovery import scientist_request
-        from .research_continuation import handoff_payload, reserve_turn, turn_allowance
+        from .research_continuation import handoff_payload, report_allowance, reserve_turn, turn_allowance
         from .research_session import SessionWorkspace
 
         latest_origin = scientist_request(Path(root), project.id)
@@ -459,23 +459,40 @@ def _run_claimed_research_job(root, project_store, jobs, job) -> ResearchJob:
                 controller_status="codex_invalid_input",
                 detail="The research increment has no scientist message; project state is preserved.",
             )
-        allowance = reserve_turn(root, project.id, origin_start, job.job_id,
-            automatic=not bool(job.payload.get("explicit_request", job.payload.get("initial", False))))
+        report_only = job.payload.get("research_mode") == "final_report"
+        allowance = (report_allowance(root, project.id, origin_start, job.job_id) if report_only
+            else reserve_turn(root, project.id, origin_start, job.job_id,
+                automatic=not bool(job.payload.get("explicit_request", job.payload.get("initial", False)))))
         if not allowance["allowed"]:
-            return _pause_research_continuation(root, jobs, job, allowance["reason"])
+            return _pause_research_continuation(root, jobs, job, allowance["reason"], project=project)
         increment, max_increments = allowance["increment"], allowance["max_increments"]
         job = replace(job, revision=job.revision + 1,
                       payload={**job.payload, **handoff_payload(allowance)})
         jobs.save(job)
-        outcome = run_codex_turn(
-            root,
-            project,
-            message,
-            initial=bool(job.payload.get("initial", False)),
-            increment=increment,
-            max_increments=max_increments,
-            research_mode=str(job.payload.get("research_mode", "research")),
-        )
+        try:
+            if report_only:
+                from .research_reporting import build_report_prompt
+                report_reason = job.payload.get("report_reason", "request_budget_exhausted")
+                message = build_report_prompt(root, project, origin_start,
+                                              report_reason)
+            outcome = run_codex_turn(
+                root,
+                project,
+                message,
+                initial=bool(job.payload.get("initial", False)),
+                increment=increment,
+                max_increments=max_increments,
+                research_mode=str(job.payload.get("research_mode", "research")),
+            )
+        except Exception as exc:
+            if not report_only:
+                from .codex_runtime import _pause_turn
+                outcome = _pause_turn(root, project, f"{type(exc).__name__}: {exc}", exc,
+                                      origin=scientist_request(Path(root), project.id))
+            else:
+                from .codex_runtime import CodexTurnOutcome
+                outcome = CodexTurnOutcome(status="paused", disposition="needs_input",
+                                           detail=f"{type(exc).__name__}: {exc}")
         finished = jobs.finish(
             job,
             state=(
@@ -489,6 +506,28 @@ def _run_claimed_research_job(root, project_store, jobs, job) -> ResearchJob:
         if SessionWorkspace(Path(root) / project.id).pause_file.exists():
             return finished
         pending = CodexRuntimeStore(root, project.id).consume_pending()
+        if report_only:
+            from .research_reporting import report_interruption_notice, save_report
+            from .presentation import ResearchConversationStore
+            interrupted = outcome.status not in {"complete", "checkpoint"} or not outcome.final_response.strip()
+            if interrupted:
+                ResearchConversationStore(root).append_message(project.id, "assistant",
+                    report_interruption_notice(outcome.detail),
+                    meta={"runtime": "research_controller", "kind": "runtime_error",
+                          "report_pending": True, "scientist_request": origin_start})
+            else:
+                save_report(root, project.id, origin_start, outcome.final_response,
+                            reason=job.payload.get("report_reason", "request_budget_exhausted"))
+            CodexRuntimeStore(root, project.id).update(status="paused",
+                label="Report interrupted" if interrupted else "Research report available",
+                report_pending=interrupted, live_narrative="", partial_response="")
+            # Reporting cannot reopen research or refill its allowance. A real
+            # newer message remains eligible for its own independent request.
+            latest_request = scientist_request(Path(root), project.id)
+            if latest_request.get("id") == origin_start.get("id"):
+                return finished
+            if not pending:
+                pending = [latest_request["content"]]
         next_payload: dict[str, Any] | None = None
         if pending:
             from .research_admission import assess_research_admission
@@ -498,7 +537,7 @@ def _run_claimed_research_job(root, project_store, jobs, job) -> ResearchJob:
             explicit = origin.get("id") != origin_start.get("id")
             allowance = turn_allowance(root, project.id, origin, automatic=not explicit)
             if not allowance["allowed"]:
-                return _pause_research_continuation(root, jobs, finished, allowance["reason"])
+                return _pause_research_continuation(root, jobs, finished, allowance["reason"], project=project)
             pending_message = (
                 "Pending conversation input and internal result notices follow. The latest "
                 "scientist instruction takes precedence; internal notices do not change its scope:\n\n"
@@ -540,6 +579,9 @@ def _run_claimed_research_job(root, project_store, jobs, job) -> ResearchJob:
                     meta={"runtime": "native_controller", "kind": "checkpoint", "recovery": repair})
                 finished = jobs.finish(finished, state=JobState.PAUSED,
                     controller_status="codex_repair_boundary", detail=detail)
+                remaining = turn_allowance(root, project.id, repair_job.payload["scientist_request"])
+                if remaining.get("reason") == "request_budget_exhausted":
+                    return _pause_research_continuation(root, jobs, finished, remaining["reason"], project=project)
         elif outcome.disposition == "native_continue":
             from .presentation import ResearchConversationStore
             from .research_recovery import latest_saved_program_evidence, schedule_result_review
@@ -580,11 +622,13 @@ def _run_claimed_research_job(root, project_store, jobs, job) -> ResearchJob:
             allowance = turn_allowance(root, project.id, origin,
                 automatic=origin.get("id") == origin_start.get("id"))
             if not allowance["allowed"]:
-                return _pause_research_continuation(root, jobs, finished, allowance["reason"])
+                return _pause_research_continuation(root, jobs, finished, allowance["reason"], project=project)
             continuation_message = (
-                    "Continue autonomously from the preserved checkpoint. Do not repeat completed "
-                    "work. Inspect the canonical state and saved artifacts, then complete the next "
-                    "highest-value accelerator-physics milestone with JuTrack."
+                    "Review the best saved result against the scientist's actual requirements. "
+                    "If it is sufficient, or further search has little justified value, finish with "
+                    "a readable report and state any unmet requirements. Otherwise take the next "
+                    "useful step from saved evidence. Do not repeat completed work or use the "
+                    "remaining budget as a reason to keep searching."
             )
             if outcome.disposition == "completion_review":
                 continuation_message = (
@@ -625,17 +669,26 @@ def _run_claimed_research_job(root, project_store, jobs, job) -> ResearchJob:
     )
 
 
-def _pause_research_continuation(root, jobs, job, reason):
+def _pause_research_continuation(root, jobs, job, reason, *, project=None):
     from .codex_runtime import CodexRuntimeStore
     from .presentation import ResearchConversationStore
     from .research_continuation import pause_explanation
 
     detail = pause_explanation(reason)
+    finished = jobs.finish(job, state=JobState.PAUSED, controller_status=reason, detail=detail)
+    if reason == "request_budget_exhausted":
+        from .research_reporting import schedule_final_report
+        from .research_recovery import scientist_request
+        project = project or ProjectStore(root).load(job.project_id)
+        if project is not None:
+            closing = schedule_final_report(root, jobs, project, scientist_request(Path(root), job.project_id), reason)
+            if closing.get("scheduled") or closing.get("reason") in {"waiting_for_calculation", "model_turn_active"}:
+                return finished
     ResearchConversationStore(root).append_message(job.project_id, "assistant", detail,
         meta={"runtime": "research_controller", "kind": "checkpoint", "reason": reason})
     CodexRuntimeStore(root, job.project_id).update(status="paused", label="Research checkpoint",
                                                 error="", live_narrative="", partial_response="")
-    return jobs.finish(job, state=JobState.PAUSED, controller_status=reason, detail=detail)
+    return finished
 
 
 def launch_research_job(root: Path | str, job: ResearchJob) -> int:
@@ -706,7 +759,10 @@ def _managed_expert_completion_message(
     nested = result.get("result")
     report = nested if isinstance(nested, Mapping) else result
     summary = str(report.get("summary", "")).strip() or f"{tool_id} completed."
-    lines = ["**Research result**", "", summary]
+    automatic = (report.get("data") or {}).get("publication") == "automatic_execution_output"
+    if automatic:
+        summary = "The calculation finished and its output was saved. Scientific interpretation has not yet been published."
+    lines = ["**Calculation finished**" if automatic else "**Research result**", "", summary]
     attached_tables = [
         table for attachment in attachments or []
         if attachment.get("type") == "evidence_summary"
@@ -731,6 +787,8 @@ def _managed_expert_completion_message(
     for table in tables if isinstance(tables, list) else []:
         if not isinstance(table, Mapping):
             continue
+        if table.get("kind") == "program_output":
+            continue  # Raw records remain expandable in the evidence attachment.
         if table in attached_tables:
             # Typed evidence is rendered as a real table by the chat client.
             # Do not expand the same rows into a second Markdown table.
@@ -1037,6 +1095,13 @@ def _run_managed_expert_job(
                 "diagnostic": str(failure_path),
             },
         )
+        if not recovery.get("scheduled"):
+            from .research_continuation import turn_allowance
+            origin = job.payload.get("scientist_request", {})
+            remaining = turn_allowance(root, project.id, origin)
+            if remaining.get("reason") == "request_budget_exhausted":
+                from .research_reporting import schedule_final_report
+                schedule_final_report(root, jobs, project, origin, "request_budget_exhausted")
         return failed
 
 

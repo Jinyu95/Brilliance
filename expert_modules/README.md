@@ -23,3 +23,15 @@ collective-effects, controls, diagnostics, and data-analysis expertise use the s
 The model normally turns this knowledge into a saved, task-specific research program. Optional
 tools are reserved for small deterministic operations that genuinely remain unchanged across
 many questions; they must not encode a design route or optimization campaign.
+
+When selected knowledge needs supporting text in every initial and continuation prompt,
+declare an ordered list in the `EXPERT.md` front matter, for example:
+`context_references: [references/method.md, references/measurement_scope.md]`.
+Brilliance delivers the primary text and those complete Markdown files as one coherent
+context bundle, with source and knowledge-status labels. Paths must stay inside the module;
+duplicate references are included once and the primary file cannot include itself.
+Includes are explicit and do not recurse through other links or front matter. Ordinary
+references remain available on demand. If a custom context budget is too small, the
+incomplete-context notice points to `read_expert` on the primary asset; its ordered pages
+contain the same entire bundle. The module must still match the request before its bundle
+is supplied, and its scientific method remains guidance rather than a mandatory controller.

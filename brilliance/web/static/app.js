@@ -15,6 +15,10 @@
     notificationsRequested: false,
     messageNodes: new Map(),
     programName: null,
+    continuingCheckpoint: null,
+    branchingCheckpoint: null,
+    continuationRequests: new Map(),
+    continuationRequestsLoaded: false,
   };
   const baseTitle = document.title;
   let titleFlashTimer = null;
@@ -41,14 +45,31 @@
       : title;
   }
 
+  function isLocalReportLink(url) {
+    if (/^\/p\/project-[A-Za-z0-9_-]+$/.test(url)) return true;
+    const artifact = url.match(/^\/api\/projects\/project-[A-Za-z0-9_-]+\/workspace-artifacts\/((?:[A-Za-z0-9._~/-]|%[A-Fa-f0-9]{2})+)$/);
+    if (!artifact) return false;
+    try {
+      return artifact[1].split("/").every((part) => {
+        const decoded = decodeURIComponent(part);
+        return decoded && decoded !== "." && decoded !== ".."
+          && !/[\\/\u0000-\u001f\u007f%?#]/.test(decoded);
+      });
+    } catch {
+      return false;
+    }
+  }
+
   function markdown(text) {
     const lines = escapeHtml(text).split(/\r?\n/);
     let html = "", list = false;
     const inline = (line) => line
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/`([^`]+)`/g, "<code>$1</code>")
-      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
-        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)/g,
+        (match, label, url) => /^https?:\/\//.test(url) || isLocalReportLink(url)
+          ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`
+          : match);
     const tableCells = (line) => {
       let value = line.trim();
       if (value.startsWith("|")) value = value.slice(1);
@@ -180,11 +201,111 @@
     return response.json();
   }
 
-  function showToast(message) {
+  function showToast(message, projectLink = null) {
     els.toast.textContent = message;
+    if (projectLink) {
+      const link = document.createElement("a");
+      link.href = `/p/${encodeURIComponent(projectLink.id)}`;
+      link.textContent = "Open research";
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        openProject(projectLink.id);
+      });
+      els.toast.appendChild(link);
+    }
     els.toast.classList.remove("hidden");
     clearTimeout(showToast.timer);
-    showToast.timer = setTimeout(() => els.toast.classList.add("hidden"), 5000);
+    showToast.timer = setTimeout(() => els.toast.classList.add("hidden"), projectLink ? 20000 : 5000);
+  }
+
+  // Keep a failed/lost response retry tied to the same server-side operation,
+  // including after a reload. A confirmed response completes that operation.
+  function checkpointRequestId(key) {
+    if (!state.continuationRequestsLoaded) {
+      state.continuationRequestsLoaded = true;
+      try {
+        const saved = JSON.parse(sessionStorage.getItem("brilliance.checkpointContinuations") || "[]");
+        for (const entry of saved.slice(-20)) {
+          if (Array.isArray(entry) && entry.length === 2 && entry.every(item => typeof item === "string")) {
+            state.continuationRequests.set(entry[0], entry[1]);
+          }
+        }
+      } catch (_) { /* Storage can be unavailable; in-memory retries still work. */ }
+    }
+    if (!state.continuationRequests.has(key)) {
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+      const requestId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+      state.continuationRequests.set(key, requestId);
+    }
+    while (state.continuationRequests.size > 20) state.continuationRequests.delete(state.continuationRequests.keys().next().value);
+    saveCheckpointRequests();
+    return state.continuationRequests.get(key);
+  }
+
+  function saveCheckpointRequests() {
+    try {
+      sessionStorage.setItem("brilliance.checkpointContinuations", JSON.stringify([...state.continuationRequests]));
+    } catch (_) { /* Private browsing/storage limits must not block continuing. */ }
+  }
+
+  function updateCheckpointButtons() {
+    document.querySelectorAll("[data-checkpoint-continue], [data-checkpoint-branch]").forEach((button) => {
+      const manual = Boolean(button.dataset.checkpointBranch);
+      const restoring = manual
+        ? button.dataset.checkpointBranch === state.branchingCheckpoint
+        : button.dataset.checkpointContinue === state.continuingCheckpoint;
+      button.disabled = Boolean(state.continuingCheckpoint || state.branchingCheckpoint);
+      button.textContent = restoring ? "Restoring…" : manual ? "Branch from here" : "Continue from here";
+      button.setAttribute("aria-busy", String(restoring));
+    });
+  }
+
+  async function branchFromCheckpoint(sourceProjectId, checkpointId) {
+    if (!sourceProjectId || state.continuingCheckpoint || state.branchingCheckpoint) return;
+    const viewedProjectId = state.projectId;
+    state.branchingCheckpoint = `${sourceProjectId}:${checkpointId}`;
+    updateCheckpointButtons();
+    try {
+      const result = await api(`/api/projects/${encodeURIComponent(sourceProjectId)}/checkpoints/${encodeURIComponent(checkpointId)}/branch`, {
+        method: "POST",
+      });
+      await loadProjects();
+      if (state.projectId === viewedProjectId) await openProject(result.project.id);
+      else showToast("Your new branch is ready for an instruction.", result.project);
+    } catch (error) {
+      showToast(`Could not branch from this point: ${error.message}`);
+    } finally {
+      state.branchingCheckpoint = null;
+      updateCheckpointButtons();
+    }
+  }
+
+  async function continueFromCheckpoint(sourceProjectId, checkpointId) {
+    if (!sourceProjectId || state.continuingCheckpoint || state.branchingCheckpoint) return;
+    const viewedProjectId = state.projectId;
+    const key = `${sourceProjectId}:${checkpointId}`;
+    const requestId = checkpointRequestId(key);
+    state.continuingCheckpoint = key;
+    updateCheckpointButtons();
+    try {
+      const result = await api(`/api/projects/${encodeURIComponent(sourceProjectId)}/checkpoints/${encodeURIComponent(checkpointId)}/continue`, {
+        method: "POST", body: JSON.stringify({ request_id: requestId }),
+      });
+      state.continuationRequests.delete(key);
+      saveCheckpointRequests();
+      await loadProjects();
+      // Navigation while a restore is pending belongs to the user.
+      if (state.projectId === viewedProjectId) await openProject(result.project.id);
+      else showToast("Research is continuing in its new branch.", result.project);
+    } catch (error) {
+      showToast(`Could not continue from this point: ${error.message}`);
+    } finally {
+      state.continuingCheckpoint = null;
+      updateCheckpointButtons();
+    }
   }
 
   function collectImageAttachmentCount(message) {
@@ -298,9 +419,12 @@
     els.conversation.innerHTML = `<div class="artifact-loading"><span class="spinner"></span>Opening the research conversation…</div>`;
     renderProjects();
     try {
-      applySnapshot(await api(`/api/projects/${encodeURIComponent(projectId)}`), true);
+      const snapshot = await api(`/api/projects/${encodeURIComponent(projectId)}`);
+      if (state.projectId !== projectId) return;
+      applySnapshot(snapshot, true);
       startStream(projectId, state.snapshot?.version || "");
     } catch (error) {
+      if (state.projectId !== projectId) return;
       showToast(error.message);
       resetToNew();
     }
@@ -364,6 +488,19 @@
         : (backend.configured === false ? "model setup needed" : project.status.replaceAll("_", " "));
     }
     if (project.active_lattice_id) els.progress.textContent += ` · Working lattice: ${project.active_lattice_id}`;
+    if (project.checkpoint_origin?.source_project) {
+      const origin = document.createElement("a");
+      const sourceProjectId = project.checkpoint_origin.source_project;
+      origin.className = "checkpoint-origin";
+      origin.href = `/p/${encodeURIComponent(sourceProjectId)}`;
+      origin.textContent = "Branch origin";
+      origin.title = `Saved checkpoint ${project.checkpoint_origin.source_checkpoint || ""} in ${sourceProjectId}`;
+      origin.addEventListener("click", (event) => {
+        event.preventDefault();
+        openProject(sourceProjectId);
+      });
+      els.progress.append(" · ", origin);
+    }
     if (!snapshot.live && (snapshot.session?.protocol_recovery || snapshot.session?.pause_requested)) {
       els.status.textContent = computationRunning ? "Agent paused · calculation running" : "Research paused";
     }
@@ -521,7 +658,7 @@
     dialog.id = "model-configuration";
     dialog.className = "model-configuration";
     dialog.innerHTML = `<h2>Models &amp; account</h2>
-      <p>ChatGPT subscription uses official Codex sign-in. IHEP and OpenAI API billing remain separate.</p>
+      <p>ChatGPT subscription uses official Codex sign-in. DeepSeek, IHEP and OpenAI API profiles use their own API keys and billing.</p>
       <label>Backend <select id="backend-profile"></select></label>
       <label>Model <input id="api-model" autocomplete="off"><select id="subscription-model" hidden></select></label>
       <button id="apply-model" type="button">Use for next turn</button>
@@ -649,20 +786,31 @@
     time.textContent = timeLabel(message.timestamp);
     body.appendChild(time);
     if (message.meta?.conversation_checkpoint) {
-      const restore = document.createElement("button");
-      restore.className = "checkpoint-branch";
-      restore.textContent = "Branch from here";
-      restore.title = "Restore saved files and conversation into a new project; the original and its jobs remain unchanged.";
-      restore.addEventListener("click", async () => {
-        if (!window.confirm("Create a new project from the saved state at this message? The original project and its running jobs will remain unchanged. No calculation will restart automatically.")) return;
-        restore.disabled = true;
-        try {
-          const result = await api(`/api/projects/${encodeURIComponent(state.projectId)}/checkpoints/${encodeURIComponent(message.meta.conversation_checkpoint)}/branch`, { method: "POST" });
-          await openProject(result.project.id);
-        } catch (error) { showToast(error.message); }
-        finally { restore.disabled = false; }
-      });
-      body.appendChild(restore);
+      const sourceProjectId = message.meta.checkpoint_project_id || state.projectId;
+      const checkpointId = message.meta.conversation_checkpoint;
+      const actions = document.createElement("div");
+      actions.className = "checkpoint-actions";
+      actions.setAttribute("role", "group");
+      actions.setAttribute("aria-label", "Actions from this checkpoint");
+      for (const action of [
+        { key: "checkpointContinue", label: "Continue from here", pending: state.continuingCheckpoint,
+          title: "Continue research automatically in a new branch from this saved point.", run: continueFromCheckpoint },
+        { key: "checkpointBranch", label: "Branch from here", pending: state.branchingCheckpoint,
+          title: "Create a new branch from this saved point and wait for your instruction.", run: branchFromCheckpoint },
+      ]) {
+        const button = document.createElement("button");
+        button.className = "checkpoint-branch";
+        button.type = "button";
+        button.dataset[action.key] = `${sourceProjectId}:${checkpointId}`;
+        const restoring = button.dataset[action.key] === action.pending;
+        button.textContent = restoring ? "Restoring…" : action.label;
+        button.disabled = Boolean(state.continuingCheckpoint || state.branchingCheckpoint);
+        button.setAttribute("aria-busy", String(restoring));
+        button.title = action.title;
+        button.addEventListener("click", () => action.run(sourceProjectId, checkpointId));
+        actions.appendChild(button);
+      }
+      body.appendChild(actions);
     }
     article.appendChild(body);
     return article;
@@ -951,13 +1099,15 @@
       // authoritative receipt stays accessible in full; a curated scientific
       // summary takes precedence over repeating every verified quantity.
       const verifiedDetails = entry.kind === "candidate_evaluation" && hasCuratedTables;
-      const automaticDetails = isAutomaticQuantities(entry) && evidenceTables.some(table => !isAutomaticQuantities(table));
-      if (verifiedDetails || automaticDetails || (rows.length > 16 && entry.kind !== "candidate_evaluation")) {
+      const automaticDetails = isAutomaticQuantities(entry);
+      const programDetails = entry.kind === "program_output";
+      if (verifiedDetails || automaticDetails || programDetails || (rows.length > 16 && entry.kind !== "candidate_evaluation")) {
         const details = document.createElement("details");
         details.className = "detailed-evidence-table" + (verifiedDetails ? " verified-evidence-details" : automaticDetails ? " automatic-quantity-details" : "");
         const heading = document.createElement("summary");
         heading.textContent = verifiedDetails ? `Verified numerical details (${rows.length} quantities)`
           : automaticDetails ? `Additional recorded quantities (${rows.length})`
+            : programDetails ? `Raw program values (${rows.length} rows)`
             : `${entry.title || "Detailed evidence"} · ${rows.length} rows`;
         details.appendChild(heading);
         if (entry.description) {

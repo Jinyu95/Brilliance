@@ -1,7 +1,8 @@
 """A durable model-turn allowance shared by every handoff of a scientist request.
 
-Numerical jobs do not consume model turns. Internal notifications never create a
-new request or replenish its budget; only a new scientist conversation entry does.
+Numerical jobs do not consume model turns. Within a project, internal notifications
+never replenish a request's budget. A new scientist request or an explicit
+continuation into a new checkpoint branch starts a fresh allowance.
 """
 from __future__ import annotations
 
@@ -51,7 +52,7 @@ def _locked(directory: Path):
 
 
 def _allowance(root: Path | str, project_id: str, origin: Mapping[str, Any], *,
-               automatic: bool, job_id: str | None = None) -> dict[str, Any]:
+               automatic: bool, job_id: str | None = None, report_only: bool = False) -> dict[str, Any]:
     from .research_recovery import scientist_request
 
     directory = Path(root).resolve() / project_id
@@ -78,6 +79,17 @@ def _allowance(root: Path | str, project_id: str, origin: Mapping[str, Any], *,
         if automatic and not policy.auto_continue:
             return {"allowed": False, "reason": "auto_continue_disabled",
                     "increment": len(turns) + 1, "max_increments": limit}
+        if report_only:
+            if len(turns) < limit:
+                return {"allowed": False, "reason": "research_budget_remaining"}
+            reserved = state.get("report_turn")
+            if reserved and reserved != job_id:
+                return {"allowed": False, "reason": "report_already_reserved"}
+            if job_id is not None and not reserved:
+                state["report_turn"] = job_id
+                atomic_write_text(path, json.dumps(state, indent=2))
+            return {"allowed": True, "reason": "", "increment": limit + 1,
+                    "max_increments": limit + 1, "scientist_request": request}
         # Retrying the same claimed job never consumes a second turn.
         if job_id is not None and job_id in turns:
             number = turns.index(job_id) + 1
@@ -109,6 +121,12 @@ def reserve_turn(root: Path | str, project_id: str, origin: Mapping[str, Any], j
                  automatic: bool = True) -> dict[str, Any]:
     """Charge one actual model invocation, idempotently by durable job identity."""
     return _allowance(root, project_id, origin, automatic=automatic, job_id=job_id)
+
+
+def report_allowance(root: Path | str, project_id: str, origin: Mapping[str, Any],
+                     job_id: str | None = None) -> dict[str, Any]:
+    """One protected closing report, never another scientific work allowance."""
+    return _allowance(root, project_id, origin, automatic=True, job_id=job_id, report_only=True)
 
 
 def handoff_payload(allowance: Mapping[str, Any]) -> dict[str, Any]:

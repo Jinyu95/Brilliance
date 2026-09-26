@@ -39,11 +39,11 @@ def _provider_id(value: str) -> str:
     return f"brilliance_{normalized or 'provider'}"
 
 
-def _responses_base_url(value: str) -> str:
+def _responses_base_url(value: str, *, append_v1: bool = True) -> str:
     base = value.strip().rstrip("/")
     if not base:
         raise CodexBackendError("A Responses-compatible provider base URL is required.")
-    if not base.lower().endswith("/v1"):
+    if append_v1 and not base.lower().endswith("/v1"):
         base += "/v1"
     return base
 
@@ -68,9 +68,11 @@ def _wire_api(values: Mapping[str, str]) -> str:
     return selected
 
 
-def _remote_base_url(values: Mapping[str, str], wire_api: str, *names: str, default: str = "") -> str:
+def _remote_base_url(values: Mapping[str, str], wire_api: str, *names: str,
+                     default: str = "", append_v1: bool = True) -> str:
     raw = _value(values, *names) or default
-    return _chat_completions_base_url(raw) if wire_api == "chat" else _responses_base_url(raw)
+    return (_chat_completions_base_url(raw) if wire_api == "chat"
+            else _responses_base_url(raw, append_v1=append_v1))
 
 
 def _positive_int(value: str, default: int) -> int:
@@ -156,7 +158,7 @@ def resolve_codex_backend(
 
     context_window = _positive_int(
         _value(values, "BRILLIANCE_CODEX_CONTEXT_WINDOW"),
-        128_000 if selected in {"deepseek", "custom"} else 32_768,
+        1_000_000 if selected == "deepseek" else 128_000 if selected == "custom" else 32_768,
     )
 
     if selected == "deepseek":
@@ -165,7 +167,7 @@ def resolve_codex_backend(
             "BRILLIANCE_CODEX_MODEL",
             "BRILLIANCE_DEEPSEEK_MODEL",
             "LLM_MODEL",
-        ) or "deepseek-chat"
+        ) or "deepseek-flash"
         wire_api = _wire_api(values)
         base_url = _remote_base_url(
             values,
@@ -174,17 +176,24 @@ def resolve_codex_backend(
             "BRILLIANCE_DEEPSEEK_BASE_URL",
             "LLM_BASE_URL",
             default="https://api.deepseek.com",
+            # DeepSeek serves Responses directly at /responses.
+            append_v1=False,
         )
-        key_env = _value(values, "BRILLIANCE_CODEX_API_KEY_ENV") or "LLM_API_KEY"
+        key_env = _value(values, "BRILLIANCE_CODEX_API_KEY_ENV")
+        if not key_env:
+            # Keep pre-profile installations working, without overriding an
+            # explicitly configured credential variable.
+            key_env = ("LLM_API_KEY" if _value(values, "LLM_API_KEY")
+                       and not _value(values, "DEEPSEEK_API_KEY") else "DEEPSEEK_API_KEY")
         if validate_credentials and not _value(values, key_env):
             raise CodexBackendError(
                 f"DeepSeek is selected but {key_env} is not configured. "
-                "Set it in .env or select BRILLIANCE_CODEX_PROVIDER=ollama/lmstudio."
+                "Set it in .env and restart Brilliance, or select another profile in Models & account."
             )
         provider_id = _provider_id("deepseek")
         overrides = _remote_provider_overrides(
             provider_id=provider_id,
-            name="DeepSeek",
+            name="DeepSeek official API",
             model=model,
             base_url=base_url,
             key_env=key_env,
@@ -194,13 +203,14 @@ def resolve_codex_backend(
         )
         return CodexBackend(
             key="deepseek",
-            name="DeepSeek",
+            name="DeepSeek official API",
             provider_id=provider_id,
             model=model,
             mode="remote",
             config_overrides=overrides,
             base_url=base_url,
             api_key_env=key_env,
+            supports_reasoning_effort=True,
             setup_hint=(
                 f"Verify {key_env}, the DeepSeek {wire_api} endpoint, and model {model!r}. "
                 "A chat-completions-only gateway needs BRILLIANCE_CODEX_WIRE_API=chat."

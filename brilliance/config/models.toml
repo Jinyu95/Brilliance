@@ -1,7 +1,7 @@
 # Non-secret model configuration. Keys belong in .env; runtime policies in research_runtime.toml.
 # Changes made through Models & account affect subsequent turns, not active calculations.
 [selection]
-profile = "chatgpt"
+profile = "ihep"
 
 [profiles.chatgpt]
 name = "ChatGPT subscription (official Codex)"
@@ -26,6 +26,16 @@ name = "OpenAI API (separate billing)"
 provider = "openai"
 auth = "api_key"
 model = "gpt-6-astra"
+reasoning_effort = "high"
+
+[profiles.deepseek]
+name = "DeepSeek official API"
+provider = "deepseek"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+model = "deepseek-flash"
+wire_api = "responses"
+context_window = 1000000
 reasoning_effort = "high"
 
 # Advanced options: defaults suit normal use. These are not JuTrack time limits.

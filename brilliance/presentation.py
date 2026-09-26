@@ -35,6 +35,7 @@ def compact_operational_messages(messages: list[dict[str, Any]]) -> list[dict[st
         meta = message.get("meta") or {}
         operational = (
             content.startswith("Preflight advisory:")
+            or meta.get("kind") == "heartbeat"
             or meta.get("scientific_role") == "activity"
             or content.startswith("**Execution ") and "submitted as a durable JuTrack calculation" in content
             or content.startswith("The long calculation was submitted as")
@@ -698,6 +699,7 @@ class ResearchConversationStore:
                     meta = dict(message.get("meta") or {})
                     if index == len(payload_messages) - 1 and checkpoint.is_file():
                         meta["conversation_checkpoint"] = path.stem
+                        meta["checkpoint_project_id"] = project_id
                     messages.append({**dict(message), "timestamp": timestamp, "meta": meta})
         return messages
 

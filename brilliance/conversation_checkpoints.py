@@ -130,6 +130,7 @@ class ConversationCheckpoints:
         payload = {"schema": _SCHEMA, "id": checkpoint_id, "project_id": project_id,
             "captured_at": datetime.now(timezone.utc).isoformat(), "status": "available",
             "project": json_safe(project), "conversation": messages, "files": files,
+            "file_mtime_ns": {relative: signature[1] for relative, signature in before.items()},
             "scope": "saved scientific files and conversation; no process memory, jobs, or provider sessions",
             "source_directory": str(directory)}
         atomic_write_text(manifest_path, json.dumps(payload, ensure_ascii=False, indent=2))
@@ -141,7 +142,7 @@ class ConversationCheckpoints:
         atomic_write_text(storage / f"{Path(conversation_path).stem}.unavailable.json",
                           json.dumps({"status": "unavailable", "reason": str(exc)}))
 
-    def fork(self, project_id, checkpoint_id):
+    def fork(self, project_id, checkpoint_id, *, continuation=False, new_id=None):
         directory = _project(self.root, project_id)
         if not re.fullmatch(r"[0-9]+-[0-9a-f]+", checkpoint_id):
             raise ValueError("Invalid conversation checkpoint identifier")
@@ -152,13 +153,24 @@ class ConversationCheckpoints:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("schema") != _SCHEMA or payload.get("project_id") != project_id:
             raise ValueError("Checkpoint identity mismatch")
-        new_id = "project-" + uuid4().hex[:14]
+        if continuation and not any(
+            message.get("role") == "user" and str(message.get("content") or "").strip()
+            for exchange in payload.get("conversation", ())
+            for message in exchange.get("payload", {}).get("messages", ())
+        ):
+            raise ValueError("This checkpoint has no saved scientist request to continue")
+        new_id = new_id or "project-" + uuid4().hex[:14]
         destination = _project(self.root, new_id)
+        if destination.exists():
+            raise ValueError("The destination project already exists")
         # A staging directory prevents incomplete branches appearing as projects.
-        staging = self.root / (".restore-" + uuid4().hex)
-        staging.mkdir()
+        temporary_root = self.root / (".restore-" + uuid4().hex)
+        staging = temporary_root / new_id
+        staging.mkdir(parents=True)
         try:
             regenerated = []
+            reset = []
+            receipts = {}
             for relative, digest in payload["files"].items():
                 target = staging / relative
                 if not target.resolve().is_relative_to(staging.resolve()):
@@ -166,6 +178,15 @@ class ConversationCheckpoints:
                 if Path(relative).parts[0] not in _ROOTS or not re.fullmatch(r"[0-9a-f]{64}", digest):
                     raise ValueError("Invalid checkpoint file entry")
                 parts = Path(relative).parts
+                if continuation and (
+                    parts[:2] in {("workspace", "request_budgets"), ("workspace", "result_reviews")}
+                    or (parts[:2] == ("workspace", "runtime_failures")
+                        and parts[-1].endswith(".recovery.json"))
+                ):
+                    # This click authorizes a fresh allowance in the new branch.
+                    # Raw diagnostics and all numerical checkpoints remain saved.
+                    reset.append(relative)
+                    continue
                 if (len(parts) == 4 and parts[:2] == ("state", "lattices")
                         and parts[-1] in {"reproduce.py", "provenance.json"}):
                     # Archive sidecars embed the owner project ID. Regenerate
@@ -181,11 +202,25 @@ class ConversationCheckpoints:
                         output.write(chunk)
                 if actual.hexdigest() != digest:
                     raise ValueError(f"Checkpoint checksum mismatch: {relative}")
+                if (parts[:2] == ("workspace", "artifacts") and len(parts) == 3
+                        and parts[-1].startswith("expert-execution-") and parts[-1].endswith(".json")):
+                    receipts[Path(relative).as_posix()] = digest
+                # Preserve ordering used to select the latest saved result.
+                modified = payload.get("file_mtime_ns", {}).get(relative, source.stat().st_mtime_ns)
+                os.utime(target, ns=(modified, modified))
             conversation = staging / "conversation"
             conversation.mkdir()
             for exchange_record in payload["conversation"]:
                 exchange = exchange_record["payload"]
                 item = {**exchange, "project_id": new_id}
+                if exchange_record["filename"] == f"{checkpoint_id}.json" and item.get("messages"):
+                    # Keep this useful point actionable if the next provider
+                    # connection fails before any new scientific progress.
+                    messages = list(item["messages"])
+                    last = messages[-1]
+                    messages[-1] = {**last, "meta": {**last.get("meta", {}),
+                        "conversation_checkpoint": checkpoint_id, "checkpoint_project_id": project_id}}
+                    item["messages"] = messages
                 # Old absolute download URLs are display references, not science data.
                 rendered = json.dumps(item, ensure_ascii=False)
                 rendered = rendered.replace(f"/api/projects/{project_id}/", f"/api/projects/{new_id}/")
@@ -196,22 +231,35 @@ class ConversationCheckpoints:
                 if Path(filename).name != filename or not re.fullmatch(r"[0-9]+-[0-9a-f]+\.json", filename):
                     raise ValueError("Invalid saved conversation filename")
                 atomic_write_text(conversation / filename, rendered)
+            previous_origin = staging / "workspace" / "RESTORED_CHECKPOINT.json"
+            inherited = json.loads(previous_origin.read_text(encoding="utf-8")) if previous_origin.is_file() else {}
+            chain = [{"project_id": project_id, "directory": str(directory)}]
+            chain.extend(inherited.get("source_chain") or ([{
+                "project_id": inherited["source_project"], "directory": inherited["source_directory"]
+            }] if inherited.get("source_project") and inherited.get("source_directory") else []))
             origin = {"source_project": project_id, "source_checkpoint": checkpoint_id,
                 "source_directory": str(directory), "branch_directory": str(destination),
                 "saved_at": payload["captured_at"], "running_jobs_restored": False,
+                "continuation": bool(continuation), "reset_operational_files": reset,
+                "source_chain": chain, "restored_file_sha256": receipts,
                 "regenerated_project_archive_sidecars": regenerated,
                 "note": "Scientific files are byte-preserved. Old absolute paths in saved programs must be adapted to this workspace before execution. Resume numerical campaigns only from their saved optimizer checkpoints; no running process or provider thread is restored."}
             atomic_write_text(staging / "workspace" / "RESTORED_CHECKPOINT.json", json.dumps(origin, indent=2))
             now = datetime.now(timezone.utc).isoformat()
             project = replace(ResearchProject.from_dict(payload["project"]), id=new_id,
                 revision=1, created_at=now, updated_at=now, status="needs_input",
-                title=str(payload["project"]["title"]) + " (checkpoint branch)",
-                next_action="Restored saved checkpoint. Send an instruction to resume; no numerical jobs were restarted.",
-                context=str(payload["project"].get("context", "")) + "\n" + json.dumps(origin))
+                title=str(payload["project"]["title"]) + ("" if continuation else " (checkpoint branch)"),
+                next_action=("Continue the authorized research from the selected saved conversation."
+                             if continuation else "Restored saved checkpoint. Send an instruction to resume; no numerical jobs were restarted."),
+                context=str(payload["project"].get("context", "")) + "\n" + json.dumps({
+                    "source_project": project_id, "source_checkpoint": checkpoint_id,
+                    "provenance": "workspace/RESTORED_CHECKPOINT.json"}))
+            # Publish only after the branch can be loaded, including its revision
+            # and regenerated archive sidecars. A crash cannot expose half a project.
+            ProjectStore(temporary_root).save(project)
             staging.rename(destination)
-            ProjectStore(self.root).save(project)
             return project
         finally:
             # Only our explicit, freshly-created staging directory is removed.
-            if staging.exists():
-                shutil.rmtree(staging)
+            if temporary_root.exists():
+                shutil.rmtree(temporary_root)

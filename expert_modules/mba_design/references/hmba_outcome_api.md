@@ -21,6 +21,12 @@ strength and damping before tracking. Do not equate a dispersion peak with
 successful hybridization. [Conventional initialization](conventional_api.md)
 remains available without imposing it as a mandatory first stage.
 
+Two dominant bumps belong in the sextupole correction regions; strongly suppress
+dispersion elsewhere and retain low-H bending. Check Dx/Dpx/betas at sextupoles,
+maximum absolute Dx and H/I5 across the core, and Dx/Dpx near zero in user
+straights. Preserve localization during refinement; a central minimum alone is
+insufficient.
+
 ## Decide from measurements
 
 | Observation | Useful experiment |
@@ -50,11 +56,15 @@ Use actual ring periodicity, resonances and symmetry breaking, not facility tune
 A chromatic-response QR/SVD nullspace preserves chromaticities locally;
 re-correct after finite moves. Add nonlinear controls for measured limitations.
 
-## Joint search and trustworthy measurements
+## Linear optics first, then nonlinear dynamics
 
-Compare emittance, connected transverse acceptance and positive/negative momentum acceptance
-among chromatically corrected candidates. Screen cheaply, then refine turns,
-sampling and integration for finalists. For segmented fields, distinguish
+Optimize linear optics and geometry first, including radiation, damping, pair
+maps and measured chromatic-correction feasibility. Then tune nonlinear families
+and track shortlisted corrected candidates; revisit linear optics when needed.
+Compare emittance, connected horizontal/vertical acceptance and both signs of
+local momentum acceptance. Use [injection-based targets](injection_acceptance.md);
+scan beyond them in both planes, and report surviving scan edges as lower bounds.
+Screen cheaply, then refine turns, sampling and integration for finalists. For segmented fields, distinguish
 physical edges from internal interfaces; demonstrate convergence without
 spurious edge focusing. Report unsupported JuTrack field models explicitly.
 
@@ -63,9 +73,12 @@ spurious edge focusing. Report unsupported JuTrack field models explicitly.
 two-bump diagnostics for symmetric positive homogeneous sector-bend MBAs (M≥5),
 not universal validators. Use identical metric definitions in optimization and
 reporting; label global peaks separately from useful sites. Unsupported tool
-scope is not physical impossibility. `mba.solve_chromatic_correction` measures response.
+scope is not physical impossibility. For segmented/reverse/combined-function
+bends, use native profiles and physical regions instead of this restricted shape
+helper. `mba.solve_chromatic_correction` measures response.
 
 Report candidate identity, launch optics/coordinates, turns, RF, radiation,
 apertures and errors. On-axis energy survival is not ring-local momentum
 acceptance; disconnected islands are not injection aperture. Compare papers
 only with these scopes disclosed. Show lattice/optics and measured acceptance.
+Report final magnet-family strengths and unmet requirements.
