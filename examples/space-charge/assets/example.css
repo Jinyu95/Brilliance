@@ -1,0 +1,15 @@
+/* Layout tweaks for the static, single-column example rendering. */
+.app-shell.single-column { display: block; max-width: 1180px; margin: 0 auto; }
+.single-column .main-panel { border: none; }
+.example-intro {
+  padding: 18px 22px; margin: 18px 22px 0; border-radius: 12px;
+  background: var(--surface-2, #f2f1ec); color: var(--text-secondary, #52514e);
+  font-size: 14px; line-height: 1.55;
+}
+.example-intro p { margin: 0; }
+.conversation { padding: 8px 22px 24px; }
+.nowrap { white-space: nowrap; }
+.download-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.download-card { cursor: default; }
+.chart-wrap { overflow-x: auto; }
+.topbar .text-button { text-decoration: none; }

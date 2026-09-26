@@ -178,6 +178,16 @@ def create_web_app(project_root: Path | str | None = None) -> Any:
         except Exception as exc:
             raise api_error(exc) from exc
 
+    @app.post("/api/projects/{project_id}/checkpoints/{checkpoint_id}/continue", status_code=201)
+    async def continue_checkpoint(project_id: str, checkpoint_id: str,
+                                  request: dict[str, Any]) -> MappingResponse:
+        try:
+            return json_safe(await asyncio.to_thread(
+                service.continue_checkpoint, project_id, checkpoint_id,
+                request_id=request.get("request_id", "")))
+        except Exception as exc:
+            raise api_error(exc) from exc
+
     @app.post("/api/projects/{project_id}/messages")
     async def project_message(project_id: str, request: dict[str, Any]) -> MappingResponse:
         try:

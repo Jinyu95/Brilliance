@@ -203,6 +203,7 @@ button { color: inherit; }
 .context-field { border-top: 1px solid var(--soft-line) !important; margin-top: 6px; padding-top: 9px !important; font-size: 12px !important; color: var(--muted) !important; }
 .disclaimer { color: #999991; text-align: center; font-size: 9px; margin: 7px 0 0; }
 .toast { position: fixed; z-index: 50; right: 22px; bottom: 145px; max-width: 380px; background: #302f2c; color: white; border-radius: 9px; padding: 10px 13px; font-size: 12px; box-shadow: var(--shadow); }
+.toast a { color: white; display: inline-block; margin-left: 10px; text-decoration: underline; }
 .hidden { display: none !important; }
 .mobile-only { display: none; }
 
@@ -256,7 +257,8 @@ button { color: inherit; }
 .technical-details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; padding: 10px; background: #f5f4f1; border-radius: 6px; }
 .technical-message { margin-block: 6px; }
 .technical-message .message-body { padding-block: 4px; }
-/* Conversation restore is a quiet, explicit branch action, never an implicit rewind. */
+/* Resume automatically or open a branch for a new instruction. */
+.checkpoint-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .checkpoint-branch {
   font-size: 0.75rem;
   color: var(--muted, #64748b);
@@ -268,4 +270,6 @@ button { color: inherit; }
   cursor: pointer;
 }
 .checkpoint-branch:hover { background: #eef2f6; }
+.checkpoint-branch:focus-visible { outline: 2px solid var(--accent, #2f6f9f); outline-offset: 3px; }
 .checkpoint-branch:disabled { opacity: .5; cursor: wait; }
+.checkpoint-origin { color: inherit; text-decoration: underline; text-underline-offset: 2px; }

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f7f5">
+  <title>BRILLIANCE · Demonstrations</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2320201e'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='40' font-family='serif' fill='white'%3EB%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./space-charge/assets/styles.css">
+  <style>
+    .app-shell.single-column { display: block; max-width: 900px; margin: 0 auto; }
+    .single-column .main-panel { border: none; }
+    .landing-head { padding: 30px 24px 6px; }
+    .landing-head h1 { margin: 0 0 6px; font-size: 24px; }
+    .landing-head p { margin: 0; color: var(--text-secondary, #52514e); font-size: 15px; line-height: 1.55; }
+    .example-list { padding: 12px 24px 32px; display: flex; flex-direction: column; gap: 16px; }
+    .example-card {
+      display: block; text-decoration: none; color: inherit;
+      padding: 18px 20px; border-radius: 12px;
+      background: var(--surface-2, #f2f1ec);
+      border: 1px solid rgba(11,11,11,0.08);
+      transition: border-color .15s ease, transform .15s ease;
+    }
+    .example-card:hover { border-color: rgba(11,11,11,0.22); transform: translateY(-1px); }
+    .example-card h2 { margin: 0 0 6px; font-size: 17px; }
+    .example-card p { margin: 0; color: var(--text-secondary, #52514e); font-size: 14px; line-height: 1.55; }
+    .example-card .go { display: inline-block; margin-top: 10px; font-size: 13px; font-weight: 600; color: var(--text-primary, #0b0b0b); }
+  </style>
+</head>
+<body>
+  <div id="app" class="app-shell single-column">
+    <main class="main-panel">
+      <header class="landing-head">
+        <h1>BRILLIANCE demonstrations</h1>
+        <p>Read-only snapshots of BRILLIANCE research conversations, rendered from saved
+        project transcripts. Each page reuses the research-UI styling and shows the actual
+        figures and result tables produced during the run.</p>
+      </header>
+
+      <section class="example-list">
+        <a class="example-card" href="./mba-design/index.html">
+          <h2>Multi-bend achromat (MBA) storage-ring design</h2>
+          <p>The original browser-saved research page (project-f82e15cdfbda87): linear optics,
+          radiation integrals and one-cell optics for a multi-bend achromat storage-ring prototype.
+          Application controls and artifact links are preserved as saved.</p>
+          <span class="go">Open demonstration →</span>
+        </a>
+
+        <a class="example-card" href="./space-charge/index.html">
+          <h2>Space-charge structure resonance in a fixed 1&nbsp;GeV FODO ring</h2>
+          <p>A coasting proton beam's space-charge tune footprint is driven across the
+          4Q<sub>x</sub>&nbsp;=&nbsp;18 structure resonance in a fixed-magnet ring, diagnosed with
+          turn-by-turn emittance, phase space, and finite-time frequency-map (FMA) analysis
+          (project-40c9bb49d1383e).</p>
+          <span class="go">Open demonstration →</span>
+        </a>
+      </section>
+    </main>
+  </div>
+</body></html>

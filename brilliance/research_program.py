@@ -118,7 +118,16 @@ def _current_lattice(context: Any, workspace: Path) -> LatticeIR | None:
     try:
         value = json.loads(pointer.read_text(encoding="utf-8"))
         raw_path = str(value.get("lattice_json", "")) if isinstance(value, Mapping) else ""
-        lattice_path = _workspace_path(workspace, raw_path, suffix=".json")
+        try:
+            lattice_path = _workspace_path(workspace, raw_path, suffix=".json")
+        except ValueError:
+            # A branch keeps the scientific pointer byte-for-byte. Resolve its
+            # declared ancestor path against the local copy, never the parent.
+            from .research_recovery import restored_workspace_path
+
+            lattice_path = restored_workspace_path(workspace.parent, raw_path)
+            if lattice_path.suffix.casefold() != ".json":
+                raise ValueError("Working lattice must be an archived JSON file")
         from .accelerator_api import load_lattice
 
         return load_lattice(lattice_path)
@@ -503,7 +512,7 @@ def run_research_program(
         from .output_tables import output_tables
         _write_json(result_file, {
             "schema_version": "1.0", "status": "completed",
-            "summary": "Python program completed. Its output is preserved below.",
+            "summary": "The calculation finished and its output was saved. Scientific interpretation has not yet been published.",
             "data": {"stdout": stdout[-20_000:], "stderr": stderr[-20_000:],
                      "returncode": process.returncode, "publication": "automatic_execution_output"},
             "tables": output_tables(stdout), "plots": plots, "downloads": downloads,

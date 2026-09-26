@@ -283,6 +283,10 @@ class ExpertRegistry:
         modules = (self.module(module_id),) if module_id else self._modules
         paths: list[Path] = []
         for module in modules:
+            # Explicit context files may live elsewhere within their module. Include
+            # them in staging, discovery and the registry's content fingerprint too.
+            paths.extend(path for asset in module.knowledge
+                         for path in asset.context_references)
             for folder in ("assets", "references"):
                 directory = module.root / folder
                 if not directory.is_dir():
@@ -371,7 +375,7 @@ class ExpertRegistry:
                         "kind": item.kind,
                         "status": item.status,
                         "source": str(item.path),
-                        "total_chars": len(_read_asset(item.path)),
+                        "total_chars": len(_read_knowledge_asset(module, item)),
                     }
                     for item in assets
                 ],
@@ -385,7 +389,7 @@ class ExpertRegistry:
                 f"unknown active knowledge asset {asset_id!r} in module {module_id!r}; "
                 "omit asset_id to list installed assets"
             )
-        source = _read_asset(asset.path)
+        source = _read_knowledge_asset(module, asset)
         if offset > len(source):
             raise ValueError(f"knowledge offset exceeds source length {len(source)}")
         end = min(len(source), offset + limit)
@@ -428,7 +432,7 @@ class ExpertRegistry:
             for asset in module.knowledge:
                 if asset.status == "deprecated":
                     continue
-                text = _read_asset(asset.path)
+                text = _read_knowledge_asset(module, asset)
                 asset_chunks = list(_chunks(text, fallback_heading=asset.title))
                 scored_chunks = [
                     (
@@ -447,7 +451,7 @@ class ExpertRegistry:
                 # section-retrieved.
                 best_score = max((item[2] for item in scored_chunks), default=0.0)
                 coherent_cost = len(text) + 300
-                if asset.kind in _COHERENT_KNOWLEDGE_KINDS and best_score > 0.0:
+                if (asset.kind in _COHERENT_KNOWLEDGE_KINDS or asset.context_references) and best_score > 0.0:
                     if coherent_cost <= max_chars:
                         heading = "Complete method (coherent route context)"
                         coherent_text = text
@@ -710,6 +714,26 @@ def _knowledge_score(
     elif asset.status == "draft":
         score -= 1.0
     return score
+
+
+def _read_knowledge_asset(module: ExpertModule, asset: KnowledgeAsset) -> str:
+    """Read one ordered context bundle; includes never expand recursively.
+
+    Retrieval and paged reads use this same text, so an incomplete-context
+    locator resolves to the complete method rather than just its short index.
+    Assets without explicit references retain their original representation.
+    """
+    if not asset.context_references:
+        return _read_asset(asset.path)
+    parts = []
+    for source in (asset.path, *asset.context_references):
+        relative = source.relative_to(module.root).as_posix()
+        parts.append(
+            f"## Context source: `{relative}`\n\n"
+            f"Module: `{module.id}` v{module.version}; status: `{asset.status}`.\n\n"
+            + _read_asset(source)
+        )
+    return "\n\n".join(parts)
 
 
 def _read_asset(path: Path) -> str:
