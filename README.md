@@ -48,9 +48,14 @@ Set `[compute].local_worker_processes` and `threads_per_worker` to fit your mach
 
 ## Use
 
+On Windows PowerShell:
 ```powershell
-.\.venv\Scripts\brilliance.exe
+.\Brilliance.cmd
 ```
+or you can double-click **Brilliance.cmd** in the project folder after completing
+installation and configuration. You can also create a desktop shortcut to this file.
+
+On Linux/macOS, use `.venv/bin/brilliance`.
 
 Open the address printed by the launcher (normally `http://127.0.0.1:8501`). For example:
 
@@ -71,10 +76,12 @@ Projects are saved under `research_projects/`. Back up this directory to preserv
 
 ## Demonstration
 
-Two read-only snapshots of research conversations are viewable in the browser via GitHub Pages ([all examples](https://jinyu95.github.io/Brilliance/examples/index.html)):
+Read-only snapshots of research conversations are available in [the example gallery](examples/index.html)
+([GitHub Pages](https://jinyu95.github.io/Brilliance/examples/index.html)):
 
 - **MBA design** — [view online](https://jinyu95.github.io/Brilliance/examples/mba-design/index.html) · [open locally](examples/mba-design/index.html).
 - **Space-charge study** — [view online](https://jinyu95.github.io/Brilliance/examples/space-charge/index.html) · [open locally](examples/space-charge/index.html).
+- **MBA design without expert modules** — [open locally](examples/mba-design-no-expert/index.html).
 
 
 ## Extend
