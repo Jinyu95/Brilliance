@@ -1,0 +1,28 @@
+/* Static layout; all scientific content comes from the saved run. */
+body { background: #f7f7f5; }
+.app-shell.single-column { display: block; max-width: 1180px; margin: 0 auto; }
+.single-column .main-panel { border: 0; margin: 0; width: 100%; }
+.example-header { padding: 28px 28px 12px; }
+.example-header h1 { font-size: clamp(23px,4vw,32px); margin: 20px 0 8px; }
+.example-header p, .archive-label { color: var(--text-secondary); }
+.archive-label { float: right; font-size: 13px; }
+.example-intro { margin: 12px 28px 20px; padding: 18px 22px; border: 1px solid #dddcd4;
+  border-radius: 12px; background: #f1f0e9; font-size: 14px; line-height: 1.65; }
+.example-intro p { margin: 0 0 12px; }
+.example-intro p:last-child { margin-bottom: 0; }
+.example-nav { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 16px; }
+.conversation { width: 100%; max-width: none; padding: 12px 28px 36px; }
+.message, figure, .evidence-table-title { scroll-margin-top: 24px; }
+.message-body { min-width: 0; }
+.message-content, .evidence-summary-text { overflow-wrap: anywhere; }
+.message pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow-y: auto; }
+.chart-wrap, .message-content:has(> table) { overflow-x: auto; }
+.generated-figure img { width: 100%; height: auto; }
+.download-card { display: inline-flex; margin: 5px 8px 5px 0; text-decoration: none; overflow-wrap: anywhere; }
+details > summary { cursor: pointer; }
+@media (max-width: 600px) {
+ .example-header { padding: 20px 14px 8px; }
+ .archive-label { float: none; display: block; margin-top: 10px; }
+ .example-intro { margin: 12px 14px; padding: 14px; }
+ .conversation { padding: 8px 12px 24px; }
+}
