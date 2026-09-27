@@ -45,6 +45,7 @@ research_runs*/
 /development_archive/
 /publication_tools/
 /publication_reports/
+/research_reviews/
 /lattice_exports/
 /benchmarks/
 /scripts/validate_*.py
@@ -71,3 +72,10 @@ desktop.ini
 assets/*.jpg
 assets/*.jpeg
 assets/*.png
+
+# Research-process review regression tests
+!/tests/test_research_review.py
+!/tests/test_research_review_output.py
+!/tests/test_research_review_scope.py
+!/tests/test_research_review_sdk.py
+!/tests/test_research_review_web.py

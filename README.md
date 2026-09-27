@@ -73,8 +73,9 @@ Projects are saved under `research_projects/`. Back up this directory to preserv
 
 Two read-only snapshots of research conversations are viewable in the browser via GitHub Pages ([all examples](https://jinyu95.github.io/Brilliance/examples/index.html)):
 
-- **MBA design** — [view online](https://jinyu95.github.io/Brilliance/examples/mba-design/index.html) · [open locally](examples/mba-design/index.html): the original browser-saved page from project-f82e15cdfbda87, unchanged, with its referenced figures, styles and script. Original application controls and artifact links are preserved; they may require the original local Brilliance server and project.
-- **Space-charge study** — [view online](https://jinyu95.github.io/Brilliance/examples/space-charge/index.html) · [open locally](examples/space-charge/index.html): a coasting proton beam's space-charge tune footprint driven across the 4Qx&nbsp;=&nbsp;18 structure resonance in a fixed 1 GeV FODO ring, diagnosed with turn-by-turn emittance, phase space, and finite-time frequency-map (FMA) analysis (project-40c9bb49d1383e). Rendered from the saved transcript by `scripts/build_space_charge_example.py`.
+- **MBA design** — [view online](https://jinyu95.github.io/Brilliance/examples/mba-design/index.html) · [open locally](examples/mba-design/index.html).
+- **Space-charge study** — [view online](https://jinyu95.github.io/Brilliance/examples/space-charge/index.html) · [open locally](examples/space-charge/index.html).
+
 
 ## Extend
 
@@ -84,3 +85,4 @@ for the no-expert benchmark. See the [expert authoring guide](docs/EXPERT_AUTHOR
 and [architecture overview](docs/ARCHITECTURE_CODEX.md) for the extension interface.
 
 JuTrack supplies the simulation engine; the model chooses and writes the research program. Saved candidates and numerical evidence, not model prose alone, establish what was calculated.
+Add an `EXPERT.md` under `expert_modules/<topic>/` to provide research knowledge. Optional Python tools expose reusable operations. See the [expert authoring guide](docs/EXPERT_AUTHORING_GUIDE.md) and [architecture overview](docs/ARCHITECTURE_CODEX.md).
