@@ -69,8 +69,9 @@ Read-only snapshots of research conversations are available in [the example gall
 ([GitHub Pages](https://jinyu95.github.io/Brilliance/examples/index.html)):
 
 - **One-chat MBA design** — [view online](https://jinyu95.github.io/Brilliance/examples/mba-design/index.html) · [open locally](examples/mba-design/index.html).
-- **One-chat MBA design without expert modules** — [open locally](examples/mba-design-no-expert/index.html).
+- **Sub-10 pm design exploration** — [open locally](examples/sub-10-pm-exploration/index.html).
 - **One-chat Space-charge study** — [view online](https://jinyu95.github.io/Brilliance/examples/space-charge/index.html) · [open locally](examples/space-charge/index.html).
+- **Real-machine optics identification (LOCO)** — [open locally](examples/machine-correction/index.html). 
 
 
 ## Extend

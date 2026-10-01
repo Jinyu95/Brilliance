@@ -87,7 +87,6 @@ def lint_jutrack_api(tree: ast.AST) -> list[str]:
                     "the name= keyword (for example jt.findelem(ring, name='QF'))"
                 )
             elif name in {
-                "Lattice",
                 "MARKER",
                 "DRIFT",
                 "KQUAD",

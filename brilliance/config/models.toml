@@ -1,7 +1,7 @@
 # Non-secret model configuration. Keys belong in .env; runtime policies in research_runtime.toml.
 # Changes made through Models & account affect subsequent turns, not active calculations.
 [selection]
-profile = "ihep"
+profile = "chatgpt"
 
 [profiles.chatgpt]
 name = "ChatGPT subscription (official Codex)"

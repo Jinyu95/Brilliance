@@ -1,0 +1,397 @@
+{
+  "project_id": "project-48df51d11b2c79",
+  "condition": "real_measurement_offline_loco_case_study",
+  "research_status": "complete",
+  "outcome": "converged_offline_coupled_optics_identification",
+  "request_satisfied": true,
+  "model": "gpt-6-astra",
+  "provider": "ChatGPT subscription",
+  "expert_modules_enabled": true,
+  "installed_modules": [
+    "laboratory.machine_correction",
+    "laboratory.strong_focusing",
+    "brilliance.accelerator_core",
+    "laboratory.mba_design",
+    "laboratory.quasi_integrable_optics"
+  ],
+  "optional_expert_assets": 2,
+  "web_access": true,
+  "first_message_at": "2026-09-30T04:36:01.705732+00:00",
+  "last_message_at": "2026-09-30T06:19:10.226512+00:00",
+  "source_message_count": 15,
+  "rendered_message_count": 15,
+  "source_conversations": [
+    {
+      "path": "conversation/20260930043601705732-e81e0124a03067bb2a6d.json",
+      "sha256": "e489463f1e734354ccea9ad3bbfaa3fcf1c0e109f0367151c487f675e38c207a"
+    },
+    {
+      "path": "conversation/20260930043805205967-d1a50faa84dfd5ea253c.json",
+      "sha256": "a085c15cc556575e8255d2f05b6e0818501815f984f95bfa6a70e9c754f4f5a4"
+    },
+    {
+      "path": "conversation/20260930044139957390-8b1d19b48fd0ca4a6855.json",
+      "sha256": "68e5598a798006d38d0aab9c068ea0552958026e5b9b7a7c1180a5f25b5f63f7"
+    },
+    {
+      "path": "conversation/20260930044408728262-64a2402314aef13b6fba.json",
+      "sha256": "7aca909338d7546ded21ea9c0b083f8b19588083aa4401fb51244067e755ac67"
+    },
+    {
+      "path": "conversation/20260930044627519669-659ddfab94e87d29c5c0.json",
+      "sha256": "70e15fbd8197ced93136e5d6ce92200bfa412b72a1dbbb76c92231c6a91845e3"
+    },
+    {
+      "path": "conversation/20260930044742643656-569130697ceb413aefef.json",
+      "sha256": "0fe7e3097c6fab2f6526273720eaee5096389ba5641dfd0228d7050b07e2bf18"
+    },
+    {
+      "path": "conversation/20260930044949409050-c2630e2fd7563bb279ae.json",
+      "sha256": "30e5f0598b9aeab5ef0439c460ab782ba1750d513d00bf11093c2b3084679959"
+    },
+    {
+      "path": "conversation/20260930045100000384-a4a1b1c3b3942ba88634.json",
+      "sha256": "0616821386bb72e1f6574a00792ea32a12855abd0b758fb7ee19d3475fdeccbf"
+    },
+    {
+      "path": "conversation/20260930045107817954-d0563625f92d02383b3c.json",
+      "sha256": "c3c181f604b85787a290e432bc48f5ff2edfeeb8d2088aa5b5483ca0041c6b8a"
+    },
+    {
+      "path": "conversation/20260930052444441716-9d4b3292f6e6749ee10b.json",
+      "sha256": "0d1e46211f7ee4bdd940c5184bf495b980c9a4d39f885248ee29dfa6bf916400"
+    },
+    {
+      "path": "conversation/20260930052653864879-98452e2275faa5151451.json",
+      "sha256": "741ea79e94cd6a39a11ec14386e399fa3b9ae1980e5d09455a2c617866eff261"
+    },
+    {
+      "path": "conversation/20260930052952237004-2a126ca9ffe03f316d0d.json",
+      "sha256": "500457503ebc80b37ec898fbb3b7ee265a4a5446a1d20d242f2aac7de77864a8"
+    },
+    {
+      "path": "conversation/20260930061026451744-2394dd97e0c4bbe5ed22.json",
+      "sha256": "117393212820e662769512817306b298a09239594b96f10408329ed846b27bee"
+    },
+    {
+      "path": "conversation/20260930061236655561-ef6f319ffca1eb3fe8c7.json",
+      "sha256": "01c7b95367b04261209069ddae8e91aa5769367dfedd708c47291538ba320450"
+    },
+    {
+      "path": "conversation/20260930061910226512-51223597797f52476992.json",
+      "sha256": "8d15cac84e595312eb16056662df9ae0f404af708aba101a53184202872e4e96"
+    }
+  ],
+  "figures": [
+    {
+      "source": "programs/program-5d63271190ec5b9fe38b/convergence.png",
+      "file": "figures/066037be152b-convergence.png",
+      "sha256": "066037be152bbe54f1c89bb4cc5b50fe6fa2dd4f9989a49f16eea27edf1e81f5",
+      "bytes": 77215
+    },
+    {
+      "source": "programs/program-5d63271190ec5b9fe38b/orm_residuals.png",
+      "file": "figures/dae4f30d1e30-orm_residuals.png",
+      "sha256": "dae4f30d1e30b7473a7a275ca160492a8bd611a27dfa3c802744255c021dccf4",
+      "bytes": 333439
+    },
+    {
+      "source": "programs/program-5d63271190ec5b9fe38b/inferred_optics.png",
+      "file": "figures/9293d5126765-inferred_optics.png",
+      "sha256": "9293d51267650fb26b4210dd1687dd72bbe62115599836f900e2dd9203c91f56",
+      "bytes": 611562
+    },
+    {
+      "source": "programs/program-5d63271190ec5b9fe38b/rf_slopes.png",
+      "file": "figures/33fcd33f4b9a-rf_slopes.png",
+      "sha256": "33fcd33f4b9a87e08517e3b841d759e06d3278403a60429a6dc4c13e1256f069",
+      "bytes": 309225
+    }
+  ],
+  "export_code_revision": "c8f09b8e53b7ec5b7bc5b65a2e649be3befb1996",
+  "renderer_sha256": "de23f85290b5bd457d2977781a40986ce4ad7b1e2036d7908b36b94b98fd07f3",
+  "scope": "Conversation, tables and original PNG plots only. No simulation rerun or new scientific validation.",
+  "benchmark_caveat": "One recorded research run, including a warm-started refinement. Not an equal-effort benchmark or proof of model agreement at measurement resolution.",
+  "excluded": [
+    "credentials",
+    "runtime environments",
+    "model internal traces",
+    "checkpoints",
+    "program sources",
+    "lattice files",
+    "raw numerical archives"
+  ],
+  "request_satisfaction_scope": "Offline fitting and requested numerical checks only; no applied or operationally validated machine correction.",
+  "offline_fit_completed": true,
+  "numerically_converged": true,
+  "numerical_validation_passed": true,
+  "model_agrees_at_resolution_scale": false,
+  "machine_applied": false,
+  "trusted_machine_correction": false,
+  "scientist_request_count": 1,
+  "focus_program": "program-5d63271190ec5b9fe38b",
+  "replaces_project_snapshot": "project-4f0cbdbfb7381d",
+  "reference_evidence": [
+    {
+      "path": "workspace/artifacts/programs/program-5d63271190ec5b9fe38b/final_report.json",
+      "sha256": "eb3052b29802552c24bcde55684b1f5602c5a6ad27debd85d65a4c7053e4b086"
+    }
+  ],
+  "machine_model": {
+    "scope": "Complete ring; beta/dispersion extrema sampled at 574 BPM exits",
+    "circumference_m": 1360.4027569004422,
+    "frequency_hz": 166600000.0,
+    "harmonic_number": 756,
+    "ultrarelativistic_rf_circumference_m": 1360.4027505882352,
+    "initial_fractional_tunes": [
+      0.42117742758986,
+      0.09550350041678644
+    ],
+    "fitted_fractional_tunes": [
+      0.1289866086381502,
+      0.2231888540692632
+    ],
+    "alpha_c": 1.9057472181354892e-05,
+    "slip_factor": 1.9050218850052083e-05,
+    "beta_x_mode1_range_m": [
+      0.5591993580891174,
+      13.385758877525179
+    ],
+    "beta_y_mode2_range_m": [
+      0.17247604414769324,
+      18.143233319340982
+    ],
+    "Dx_range_m": [
+      -0.005224704393405045,
+      0.07188110960453513
+    ],
+    "Dy_range_m": [
+      -0.010973162856021644,
+      0.012736706143585377
+    ],
+    "eigenvalue_modulus_max_error": 7.173388660852709e-08
+  },
+  "fit_metrics": {
+    "merit": 203.21892479207415,
+    "solve_merit": 266.3454651169335,
+    "blocks": [
+      {
+        "block": "XX",
+        "count": 110016,
+        "rms": 0.08686402365949032,
+        "unit": "m/rad",
+        "weighted_rms": 13.646706313810478
+      },
+      {
+        "block": "XY",
+        "count": 110016,
+        "rms": 0.10969277810100925,
+        "unit": "m/rad",
+        "weighted_rms": 12.860898825635877
+      },
+      {
+        "block": "YX",
+        "count": 110016,
+        "rms": 0.08324052385287876,
+        "unit": "m/rad",
+        "weighted_rms": 12.263410963550134
+      },
+      {
+        "block": "YY",
+        "count": 110016,
+        "rms": 0.15270774394199188,
+        "unit": "m/rad",
+        "weighted_rms": 17.672903188955104
+      },
+      {
+        "block": "RF-X",
+        "count": 573,
+        "rms": 1.3822749818483518e-07,
+        "unit": "m/Hz",
+        "weighted_rms": 7.31685177214658
+      },
+      {
+        "block": "RF-Y",
+        "count": 573,
+        "rms": 2.1800755801771743e-07,
+        "unit": "m/Hz",
+        "weighted_rms": 8.263584460739668
+      }
+    ]
+  },
+  "convergence": {
+    "full_iterations": 39,
+    "full_jacobians": 40,
+    "maximum_last_five_relative_solve_merit_change": 3.945726417915053e-08,
+    "final_max_scaled_step": 0.009133912250030463,
+    "final_gradient_cosine": 9.289257638353763e-06,
+    "active_bounds": 0
+  },
+  "checks": {
+    "reload": {
+      "relative_orm_difference": 3.931119161566966e-16,
+      "rms_saved_prediction_difference_resolution_units": 4.4693879262615936e-05,
+      "exported_lattice_sha256": "b495c36349fcd7c42018e2c1ace9dde50c13ee11ba4ab57ed9790d77b9722259"
+    },
+    "map_step": {
+      "max_change_in_resolution_units": 0.00020905535390012203,
+      "rms_change_in_resolution_units": 2.6675718456543242e-05
+    },
+    "small_kick": {
+      "relative_error": 1.299191528653816e-07,
+      "maximum_difference_m_per_rad": 1.55832956152957e-06,
+      "maximum_dispersion_difference_m": 1.140167252278168e-09,
+      "closure_m": 1.2624179045878092e-17
+    },
+    "measurement_span_kicks": [
+      {
+        "column": 0,
+        "name": "R01FC1H",
+        "full_span_rad": 2.9999999999999997e-05,
+        "relative_difference": 0.0009921470707426364,
+        "max_difference_m_per_rad": 0.0076212066181842175,
+        "rms_calibrated_difference_resolution_units": 0.256869491957775
+      },
+      {
+        "column": 95,
+        "name": "R24FC4H",
+        "full_span_rad": 3.0000000000000004e-05,
+        "relative_difference": 0.002063968894567328,
+        "max_difference_m_per_rad": 0.01839100599518062,
+        "rms_calibrated_difference_resolution_units": 0.6107063480186915
+      },
+      {
+        "column": 192,
+        "name": "R01FC1V",
+        "full_span_rad": 1.9999999999999998e-05,
+        "relative_difference": 0.0002145045184278312,
+        "max_difference_m_per_rad": 0.002979914083045543,
+        "rms_calibrated_difference_resolution_units": 0.07378458036983136
+      },
+      {
+        "column": 287,
+        "name": "R24FC4V",
+        "full_span_rad": 1.9999999999999998e-05,
+        "relative_difference": 0.0007226641626203592,
+        "max_difference_m_per_rad": 0.010419255464388044,
+        "rms_calibrated_difference_resolution_units": 0.2141833981604387
+      }
+    ],
+    "finite_rf_span": {
+      "plus": {
+        "df_hz": 5.0,
+        "dp": -0.0015865721619529375,
+        "path_residual_m": -9.486769009248164e-20
+      },
+      "minus": {
+        "df_hz": -5.0,
+        "dp": 0.0015642344117879124,
+        "path_residual_m": -5.89534931288993e-19
+      },
+      "rms_slope_difference_m_per_hz": 9.751367719821524e-09,
+      "rms_difference_resolution_units": 0.4435653298314161
+    },
+    "parameter_step_sensitivity": [
+      {
+        "parameter": "R01QF1_factor",
+        "relative_derivative_difference": 3.0112840020830936e-06
+      },
+      {
+        "parameter": "R08QD1_factor",
+        "relative_derivative_difference": 2.143877542989039e-06
+      },
+      {
+        "parameter": "R15QD4+QD5_factor",
+        "relative_derivative_difference": 2.4592708560604443e-06
+      },
+      {
+        "parameter": "R22QD8_factor",
+        "relative_derivative_difference": 1.9123715477628903e-06
+      },
+      {
+        "parameter": "R29QF6_factor",
+        "relative_derivative_difference": 1.7142598488291481e-06
+      },
+      {
+        "parameter": "R36SD1+SD2_dx",
+        "relative_derivative_difference": 1.5038481833838263e-06
+      },
+      {
+        "parameter": "R43SD1+SD2_dy",
+        "relative_derivative_difference": 6.028388841922116e-06
+      },
+      {
+        "parameter": "R02SD3+SD4_dx",
+        "relative_derivative_difference": 2.578569082072401e-06
+      },
+      {
+        "parameter": "R09SD3+SD4_dy",
+        "relative_derivative_difference": 2.136901609995558e-06
+      },
+      {
+        "parameter": "R16SF1_dx",
+        "relative_derivative_difference": 1.1820495125483697e-06
+      },
+      {
+        "parameter": "R23SF2_dx",
+        "relative_derivative_difference": 4.0862571639911165e-06
+      }
+    ]
+  },
+  "identifiability": {
+    "free_parameters": 3204,
+    "active_observations": 441210,
+    "zero_sensitivity_columns": 0,
+    "full_singular_value_analysis_performed": false,
+    "confidence_intervals_computed": false,
+    "interpretation": "All parameters have nonzero local sensitivity. This does not establish uniqueness or noise-based identifiability. RF constrains the global gain scale; weak correlated calibration/magnet combinations remain possible."
+  },
+  "limitations": [
+    "Residuals exceed the supplied resolution scale; the inferred optics/calibrations are conditional on the requested model.",
+    "Resolution weights are not statistical uncertainties of averaged differences.",
+    "No full covariance/rank or independent measurement validation; correlated parameters may not be individually identifiable.",
+    "Static fixed-path JuTrack model; source initialization and coordinate conventions retained. No hardware settings or operational validation."
+  ],
+  "files": [
+    {
+      "path": "assets/example.css",
+      "sha256": "3d761468399f847d3b5f737d47126c3e084b67e0cef1fa494999a15f1fabd8e3",
+      "bytes": 1947
+    },
+    {
+      "path": "assets/styles.css",
+      "sha256": "1fccb7da6b434ae615af3a7c4d5a06774b9a79507bd94eb968bfa47c5060b38e",
+      "bytes": 20426
+    },
+    {
+      "path": "assets/workbench.css",
+      "sha256": "ebc35ba2c43048e0b3298d56ff415fca5e91d2916edd2810d15b930f8acf69be",
+      "bytes": 3329
+    },
+    {
+      "path": "figures/066037be152b-convergence.png",
+      "sha256": "066037be152bbe54f1c89bb4cc5b50fe6fa2dd4f9989a49f16eea27edf1e81f5",
+      "bytes": 77215
+    },
+    {
+      "path": "figures/33fcd33f4b9a-rf_slopes.png",
+      "sha256": "33fcd33f4b9a87e08517e3b841d759e06d3278403a60429a6dc4c13e1256f069",
+      "bytes": 309225
+    },
+    {
+      "path": "figures/9293d5126765-inferred_optics.png",
+      "sha256": "9293d51267650fb26b4210dd1687dd72bbe62115599836f900e2dd9203c91f56",
+      "bytes": 611562
+    },
+    {
+      "path": "figures/dae4f30d1e30-orm_residuals.png",
+      "sha256": "dae4f30d1e30b7473a7a275ca160492a8bd611a27dfa3c802744255c021dccf4",
+      "bytes": 333439
+    },
+    {
+      "path": "index.html",
+      "sha256": "db55433b5c2fbeddf36355829f19170c965af43596dd8b8dccbad6c312799773",
+      "bytes": 83752
+    }
+  ]
+}
