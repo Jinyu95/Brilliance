@@ -6,6 +6,7 @@ import numpy as np
 from brilliance.expert_sdk import python_tool
 
 from .fitting import fit_response_model as _fit
+from .fitting import load_fit_checkpoint as _load_fit_checkpoint
 from .measurements import align_observations as _align
 from .measurements import read_loco_measurements as _read_measurements
 from .measurements import read_named_settings as _read_settings
@@ -16,6 +17,7 @@ read_loco_measurements = python_tool()(_read_measurements)
 read_named_settings = python_tool()(_read_settings)
 align_observations = python_tool()(_align)
 fit_response_model = python_tool(durable=True)(_fit)
+load_fit_checkpoint = python_tool()(_load_fit_checkpoint)
 jutrack_response = python_tool()(_response)
 validate_jutrack_response = python_tool()(_validate_response)
 

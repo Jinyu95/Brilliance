@@ -7,7 +7,7 @@ profile = "chatgpt"
 name = "ChatGPT subscription (official Codex)"
 provider = "chatgpt"
 # Empty means the default discovered by Codex, not a guessed model name.
-model = "gpt-6-astra"
+model = "gpt-6.1-sol"
 reasoning_effort = "high"
 
 [profiles.ihep]

@@ -33,7 +33,7 @@ dependencies = [
     "psutil>=5.9",
     "matplotlib>=3.8",
     "pypdf>=5",
-    "openai-codex==0.155.1",
+    "openai-codex==0.160.0",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "python-dotenv>=1.0",

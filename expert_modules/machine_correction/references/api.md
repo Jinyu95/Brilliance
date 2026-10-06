@@ -149,10 +149,19 @@ coordinates. Freeze the active mask during a fit.
 Outputs include exact `parameter_values`, named `parameters`, final `prediction`,
 `physical_residuals`, `weighted_residuals`, `chi_square`, `prior_chi_square`,
 `active_bounds`, `solver`, `callback_evaluations`, bounded `history`, and
-`identifiability` (scaled data-only Jacobian, singular values, rank and condition).
+`identifiability` (scaled data-only Jacobian, singular values, rank and condition
+for small fits; explicitly not computed for large fits).
 `solver.success` means numerical termination only. `max_nfev` counts solver
 objective calls; each Jacobian and the independently repeated final prediction
 also call the model. Use `callback_evaluations` for actual work, not just nfev.
+The final model call reapplies the exact fitted parameters after derivative probes
+and checks that the prediction is reproduced. A mutating callback must assign all
+parameters on every invocation. On failure, the fitter attempts to restore the best
+evaluated objective state (or the solver result if available), preserves the original
+exception, and adds a diagnostic note if restoration also fails. A callback that
+internally resets its own ring retains that behavior; the fitter cannot discover
+or export hidden model state.
+
 When `sigma` contains chosen numerical scales rather than measurement errors,
 the field named `chi_square` is only a weighted sum of squared residuals, not a
 statistically calibrated chi-square test.
@@ -167,6 +176,55 @@ finite-difference Jacobian can be large: estimate memory/evaluation cost from th
 active observations and free parameters before fitting. The callback progress
 should show completed evaluations and current residual, not repeatedly print the
 whole matrix or every finite-difference probe.
+
+### Reusable acceleration and numerical recovery
+
+Optional `analytic_parameters=["bpm_gain", ...]` and `analytic_jacobian(p)` supply
+unweighted prediction derivatives in a dense or SciPy sparse matrix with shape
+`(all_observations, len(analytic_parameters))`. Columns follow the supplied names,
+not the whole fit-vector order. The fitter applies masks and weights itself;
+only the remaining parameters use finite differences. The derivative callback
+must use its explicit parameters, not assume a preceding probe left a ring at p.
+
+`batch_model(vectors)` supplies ordered full prediction vectors from private workers.
+Pass the existing `api.parallel_evaluator(factory, workers=...)` context manager
+directly; each factory builds its own model/ring and returns the same numerical
+prediction function. Never distribute a shared mutable JuTrack ring to threads.
+An initial worker prediction is checked against the parent model. `batch_size=16`
+limits the number of finite-difference columns per batch (up to 32 probes).
+Use the pool's `on_result` for live within-batch progress. Worker exceptions propagate.
+
+Above `dense_jacobian_max_bytes` (64 MiB by default), the fitter uses disk-backed
+physical derivative blocks, sparse analytic blocks and an LSMR linear solve.
+`jacobian_directory` optionally locates temporary storage. Scratch files are owned
+by their Jacobian operators and released when those operators are discarded; they
+are not checkpoints. Large fits omit full SVD and nested-list Jacobian export:
+`identifiability.computed=False`, `rank=None`, `rank_deficient=None`. This is **not**
+a full-rank claim. Small-fit rank is floating-point numerical rank, not noise-based
+identifiability. Increase the memory threshold only with sufficient resources.
+
+Provide `checkpoint_path=".../fit_checkpoint.npz"` and a JSON-compatible
+`checkpoint_context` containing exact model/lattice/data/code hashes. The fitter
+atomically saves improving objective states and the final parameter/prediction
+pair before reporting callbacks or final diagnostics. A reporting exception
+therefore leaves numerical results recoverable. The checkpoint does not replace
+the supplied ring, input measurements or the program defining the parameterization.
+
+```python
+saved = loco.load_fit_checkpoint(checkpoint_path)  # no simulation or state mutation
+parameters = saved["parameter_values"]
+# To continue fitting, pass the same problem/context and checkpoint_path with
+# resume=True to fit_response_model. A changed fingerprint fails before simulation.
+```
+
+Resume is a **warm restart with a fresh solver budget**, not an exact trust-region
+continuation or an additional fixed number of accepted updates. An intermediate
+snapshot is the best evaluated objective, not necessarily an accepted solver
+iterate; the metadata distinguishes it from a final solver result. No checkpoint
+claims scientific acceptance. Exact parameter/prediction arrays use NPZ without
+pickle; metadata records masks, names, objective and problem fingerprint.
+Returned `analytic_jacobian_calls`, `batch_calls` and `callback_evaluations` make
+the costs explicit (analytic callbacks' own hidden simulation work is not counted).
 
 ## Offline correction proposal
 

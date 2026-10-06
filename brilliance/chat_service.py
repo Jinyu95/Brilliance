@@ -138,7 +138,7 @@ class ResearchChatService:
                 "status": project.status,
                 "updated_at": project.updated_at,
                 "progress": {"accepted": accepted, "total": len(project.tasks)},
-                "backend": describe_codex_backend(),
+                "backend": self._recorded_project_backend(project.id),
                 "active": (
                     self._active_agent_job(project.id) is not None
                     or self._active_compute_job(project.id) is not None
@@ -1269,6 +1269,13 @@ class ResearchChatService:
             "attachments": list(attachments or []),
         }
 
+    def _recorded_project_backend(self, project_id: str) -> Mapping[str, Any]:
+        """Last recorded research model, independent of the next-turn selection."""
+        backend = CodexRuntimeStore(self.root, project_id).load().get("backend")
+        if isinstance(backend, Mapping) and backend.get("model"):
+            return dict(backend)
+        return {"model": "", "name": "Model not recorded"}
+
     def _project_meta(self, project: ResearchProject) -> Mapping[str, Any]:
         accepted = sum(task.status == "accepted" for task in project.tasks)
         current = next((task for task in project.tasks if task.id == project.current_task_id), None)
@@ -1281,7 +1288,7 @@ class ResearchChatService:
             "updated_at": project.updated_at,
             "active_lattice_id": project.active_lattice_id,
             "runtime": "codex",
-            "backend": describe_codex_backend(),
+            "backend": self._recorded_project_backend(project.id),
             "research_network": self._research_network_meta(),
             "progress": {"accepted": accepted, "total": len(project.tasks)},
             "current_task": (

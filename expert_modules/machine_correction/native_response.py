@@ -56,9 +56,11 @@ def _prepare(jt: Any, lattice: Any, bpms: Sequence[int], correctors: Sequence[in
         raise ValueError("A complete, nonempty ring is required")
     for index, element in enumerate(lat):
         kind = str(getattr(element, "eletype", type(element).__name__)).upper()
-        excluded = ("RF", "CAV", "_SC", "SPACECHARGE", "WAKE", "BEAMBEAM",
+        excluded = ("CAV", "_SC", "SPACECHARGE", "WAKE", "BEAMBEAM",
                     "LONGITUDINAL", "RADIATION")
-        if any(token in kind for token in excluded) or hasattr(element, "volt"):
+        # "LinearFint" / "LinearFriTrap" contain the letters RF, but are
+        # static fringe magnets, not radio-frequency elements.
+        if kind.startswith("RF") or any(token in kind for token in excluded) or hasattr(element, "volt"):
             raise ValueError(f"Unsupported RF/collective/time-dependent element {index}: {kind}")
         if float(getattr(element, "rad", 0)) != 0:
             raise ValueError(f"Radiation is enabled at element {index}; it will not be disabled")
