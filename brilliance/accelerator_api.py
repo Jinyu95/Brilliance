@@ -17,6 +17,10 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
+from .acceptance_measurements import (
+    connected_momentum_acceptance,  # noqa: F401 - shared search/report measurement
+    connected_transverse_acceptance,  # noqa: F401 - sampled connected aperture
+)
 from .api_result_types import MagnetStrengthLimits, PeriodicCellEvaluation
 from .artifacts import json_safe
 from .candidate_evidence import (
@@ -37,6 +41,7 @@ from .native_measurements import (
     jutrack_design_metrics,  # noqa: F401 - same observables in search and reporting
 )
 from .population_optimization import read_optimization_checkpoint  # noqa: F401 - public API
+from .parameterization_audit import audit_parameterization  # noqa: F401 - public knob audit
 from .region_measurements import (
     region_optics_summary,  # noqa: F401 - public measured-region summary
 )

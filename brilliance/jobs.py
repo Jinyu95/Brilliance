@@ -493,6 +493,7 @@ def _run_claimed_research_job(root, project_store, jobs, job) -> ResearchJob:
                 from .codex_runtime import CodexTurnOutcome
                 outcome = CodexTurnOutcome(status="paused", disposition="needs_input",
                                            detail=f"{type(exc).__name__}: {exc}")
+        cancelled_before_finish = jobs.cancellation_requested(project.id, job.job_id)
         finished = jobs.finish(
             job,
             state=(
@@ -617,6 +618,14 @@ def _run_claimed_research_job(root, project_store, jobs, job) -> ResearchJob:
                 )
                 finished = jobs.finish(finished, state=JobState.PAUSED,
                     controller_status=f"codex_{reason}", detail=detail)
+        elif outcome.disposition == "complete":
+            from .completion_review import schedule_completion_review
+            review = schedule_completion_review(
+                root, jobs, finished, project, outcome, origin_start,
+                cancelled=cancelled_before_finish)
+            if review.get("reason") == "request_budget_exhausted":
+                return _pause_research_continuation(
+                    root, jobs, finished, review["reason"], project=project)
         elif outcome.disposition in {"continue", "completion_review"}:
             origin = scientist_request(Path(root), project.id)
             allowance = turn_allowance(root, project.id, origin,
@@ -758,11 +767,19 @@ def _managed_expert_completion_message(
 
     nested = result.get("result")
     report = nested if isinstance(nested, Mapping) else result
+    from .scientific_reporting import artifact_only_table, is_artifact_reference, normalize_scientific_outcome
+
+    report = normalize_scientific_outcome(report)
+    artifacts_only = report["outcome_presentation"]["publication_status"] == "artifacts_only"
     summary = str(report.get("summary", "")).strip() or f"{tool_id} completed."
     automatic = (report.get("data") or {}).get("publication") == "automatic_execution_output"
     if automatic:
         summary = "The calculation finished and its output was saved. Scientific interpretation has not yet been published."
-    lines = ["**Calculation finished**" if automatic else "**Research result**", "", summary]
+    heading = "Calculation finished" if automatic else report["outcome_presentation"]["heading"]
+    lines = [f"**{heading}**", "", summary]
+    if artifacts_only:
+        lines.extend(["", "This publication contains file locations, not measured results. "
+                      "The saved output still needs a scientific explanation; no recalculation is needed to read it."])
     attached_tables = [
         table for attachment in attachments or []
         if attachment.get("type") == "evidence_summary"
@@ -777,6 +794,7 @@ def _managed_expert_completion_message(
         scalar_rows = [(key, value) for key, value in list(data.items())[:24]
                        if not isinstance(value, (Mapping, list, tuple))
                        and key not in {"stdout", "stderr", "publication", "returncode"}
+                       and not is_artifact_reference(value, str(key))
                        and (not isinstance(value, str) or (len(value) <= 160 and "\n" not in value))
                        and {"quantity": str(key), "value": value} not in attached_scalar_rows]
         if scalar_rows:
@@ -786,6 +804,8 @@ def _managed_expert_completion_message(
     tables = report.get("tables", [])
     for table in tables if isinstance(tables, list) else []:
         if not isinstance(table, Mapping):
+            continue
+        if artifact_only_table(table):
             continue
         if table.get("kind") == "program_output":
             continue  # Raw records remain expandable in the evidence attachment.

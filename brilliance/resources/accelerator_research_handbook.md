@@ -63,6 +63,18 @@ progress across model turns; only explicit cancellation stops independent work.
 A failed search does not establish topology exhaustion. Diagnose the actual
 residuals, feasible fraction, active bounds and convergence before branching.
 
+For a generated parameterization, use `api.audit_parameterization` on a callback
+returning actual physical fields, not the input knob vector or metadata. Check
+the start and selected points: projection/clipping can make nominal knobs locally
+ineffective. Repair the parameterization or remove those local search directions;
+do not spend a campaign varying unchanged physical inputs.
+Before committing compute, publish a compact mapping of requested outcomes to
+measured objectives/constraints/diagnostics. Reuse one measurement callback in
+search and reporting; preserve those outcomes when revising objectives. Retain
+useful alternatives and test the limitation exposed by the preceding result,
+not just an easier proxy. A justified, changed in-scope experiment can proceed
+within the same request without asking the scientist to write another prompt.
+
 ## Results
 
 Ordinary Python can print results and save files under `BRILLIANCE_RUN_OUTPUT`;

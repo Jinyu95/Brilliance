@@ -696,6 +696,9 @@ class ResearchRun:
         receipt; an absent receipt does not prevent publication or explicit selection.
         No simulation, plots, geometry policing or inferred acceptance runs here.
         Numerical checkpoints and result.json survive optional live-reporting errors.
+        Publish measured quantities in data/tables and explain their significance in
+        summary. File paths belong in downloads; naming selected.json does not publish
+        its contents. Read saved results for reporting rather than repeating a calculation.
         """
         normalized_status = {"complete": "completed", "intermediate": "partial"}.get(
             str(status).strip().lower(), str(status).strip().lower())

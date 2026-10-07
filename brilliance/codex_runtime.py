@@ -2625,7 +2625,12 @@ def _turn_attachments(
         except (OSError, json.JSONDecodeError, LookupError):
             continue
         if isinstance(value, Mapping) and (value.get("tables") or value.get("summary")):
+            from .scientific_reporting import artifact_only_table, artifact_references, normalize_scientific_outcome
+
+            value = normalize_scientific_outcome(value)
+            references = artifact_references(value)
             tables = value.get("tables", []) if isinstance(value.get("tables"), list) else []
+            tables = [table for table in tables if not isinstance(table, Mapping) or not artifact_only_table(table)]
             data = value.get("data", {}) if isinstance(value.get("data"), Mapping) else {}
             lattice_id = None if value.get("candidate_lattice") else data.get("lattice_id")
             if value.get("candidate_lattice"):
@@ -2670,7 +2675,9 @@ def _turn_attachments(
             attachments.append(
                 {
                     "type": "evidence_summary",
-                    "title": str(value.get("title") or "Scientific result"),
+                    "title": str(value.get("title") or (
+                        "Artifacts saved" if value["outcome_presentation"]["needs_scientific_interpretation"]
+                        else "Scientific result")),
                     "summary": value.get("summary", ""),
                     "program_stdout": (str(data.get("stdout", ""))[-20000:]
                                        if data.get("publication") == "automatic_execution_output" else ""),
@@ -2693,6 +2700,9 @@ def _turn_attachments(
                     "result_path": str(record["path"]),
                 }
             )
+            if references:
+                attachments.append({"type": "technical_details", "title": "Saved artifact locations",
+                                    "rows": [{"text": f"{item['name']}: {item['path']}"} for item in references]})
             base = Path(str(record["path"])).parent
             for plot in value.get("plots", []) if isinstance(value.get("plots"), list) else []:
                 declare(base, plot, kind="image", default_title="Scientific figure")
@@ -2744,7 +2754,8 @@ def _turn_attachments(
     downloads.sort(key=lambda item: item.get("artifact_role") != "candidate_definition")
     comparison = [{"type": "alternative_results", "title": "Other calculations — not selected for this answer",
                    "rows": alternatives}] if alternatives else []
-    return [*summaries, *images, *downloads, *comparison]
+    locations = [item for item in attachments if item.get("type") == "technical_details"]
+    return [*summaries, *images, *downloads, *locations, *comparison]
 
 
 def _presentable_result_narrative(attachments: list[Mapping[str, Any]]) -> str:
@@ -2754,6 +2765,9 @@ def _presentable_result_narrative(attachments: list[Mapping[str, Any]]) -> str:
     if not summaries:
         return ""
     result = summaries[-1]
+    if result.get("outcome_presentation", {}).get("needs_scientific_interpretation"):
+        return ("**Calculation output saved**\n\nThe saved result lists artifacts without publishing their "
+                "measurements. Those files need to be read and explained before a scientific conclusion is available.")
     summary = str(result.get("summary", "")).strip()
     if not summary:
         return ""

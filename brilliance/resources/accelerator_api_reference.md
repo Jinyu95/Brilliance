@@ -33,6 +33,30 @@ An expert can provide optional numerical checks. If explicitly requested in
 annotations. The app does not infer required checks from the user's wording or
 choose a scientific route. Caller-declared success is not automatic certification.
 
+## Connected tracking acceptance
+
+Use the same reducers on short-screen and final-validation survival masks:
+
+```python
+momentum = api.connected_momentum_acceptance(
+    delta_grid, survived_by_location, location_names=names,
+    target_interval=[-0.02, 0.02], strict=True)
+transverse = api.connected_transverse_acceptance(
+    x_grid_m, y_grid_m, survived_xy, target_mask=injection_domain)
+```
+
+The numbers above illustrate a caller-specified target, not application defaults.
+Momentum offsets are fractional, not percent; masks include an actually tracked
+zero at each location. Transverse shape is `(len(y), len(x))`. Disconnected
+survivors do not extend the origin-connected region. A surviving scan boundary
+is reported as censored, not as the physical aperture. Without explicit targets,
+`request_satisfied` is `None`. Use independent momentum `target_checks` to expose
+each location/sign deficit; an average survival score cannot establish that all
+requirements passed. The transverse area is sampled trapezoidal quadrature, not
+continuous acceptance. These functions perform no tracking or machine certification.
+Keep candidate identity, launch conditions, turns, grids and RF/radiation/errors
+alongside every mask; short screens and long validation remain different evidence.
+
 ## Composable experiments and exact candidate selection
 
 For composed lattice searches, `ExperimentDefinition`, `LatticeExperiment`
@@ -404,6 +428,10 @@ On success read `chromaticity_x`, `chromaticity_y` (identical-ring derivatives),
 `per_period_chromaticities`, `step_estimates`, `step_difference`, and `samples`
 (closed orbits, verification residuals and fractional tunes). With half-step
 checking, the reported derivative uses `dp_step/2`; assess step convergence.
+Use the same derivative method, momentum step and convergence checks for matching
+and acceptance on the exact candidate. The legacy `getchrom` result exposed by
+`api.evaluate` is a different finite-difference measurement; do not silently
+compare it against a tight tolerance calibrated with this central-difference API.
 Physical measurement failures return `computed=False` and `reason`, not zero
 chromaticities. A native radiation `DomainError` preserves its diagnostic as
 unavailable radiation; it does not establish a physical cause. Runtime/API
@@ -821,6 +849,34 @@ Report dimensions from the actual element rows, or use geometry from
 table; tables and labels remain the author's responsibility. Stored unit length,
 cell length and ring circumference have different scopes. Keep numerical inputs
 at full precision and format only for display.
+
+## Parameterization sensitivity audit
+
+Before an expensive campaign, verify that its coordinates change the actual
+physical construction. `api.audit_parameterization(build, position, *, bounds,
+step_fraction=0.01, output_atol=0.0, output_rtol=1e-10)` accepts **named mappings**:
+
+```python
+def physical_fields(knobs):
+    rows = build_candidate(knobs)  # your parameterized builder; no metadata weights
+    return {f"{r['name']}:{field}": float(r.get(field) or 0.0)
+            for r in rows for field in ("length_m", "angle_rad", "k1_m2", "k2_m3")}
+
+audit = api.audit_parameterization(physical_fields, named_x0, bounds=named_bounds)
+```
+
+Each nonfixed knob is probed in both available bounded directions. Full precision
+is preserved; neither nominal points nor builder outputs are projected by this
+helper. It reports `knobs`, `locally_flat_knobs`, `inconclusive_knobs`, and a repeated
+`baseline_repeat` check; callback errors or changed output schemas are explicit.
+Choose output tolerances in native units (a per-output `output_atol` mapping is
+supported). Inspect local-flat controls before spending optimization evaluations:
+a saturated allocation, clipping, or redundant coordinate can leave physical
+geometry unchanged even though its metadata changes. Repeat at representative
+points when needed. Local flatness is **not** global ineffectiveness or proof of
+an impossible design. This audit does not measure optics or response rank; use
+JuTrack and `api.measure_response` for those. Callbacks must reset every coordinate
+on a private model; the helper repeats the nominal call to restore that state.
 
 ## Population optimization
 
