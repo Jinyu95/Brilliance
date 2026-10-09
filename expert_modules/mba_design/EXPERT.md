@@ -5,28 +5,25 @@ summary: Concise MBA design knowledge and optional JuTrack-backed diagnostics; n
 domains: [mba, lattice design, electron storage rings, synchrotron light sources]
 authors: [Brilliance project team (draft maintainer)]
 tags: [mba, hmba, h7ba, modified-h7ba, 5ba, 6ba, 7ba, 9ba, tme, modified-tme, hybrid-mba, emittance, chromatic, sextupole, matching, radiation, optimization, jutrack, superperiod, superperiods, super-periodic, ultralow-emittance, sub-10]
-version: 3.15.1
+version: 3.17.0
 status: draft
 knowledge_status: draft
 kind: method
-context_references: [references/hmba_outcome_api.md, references/injection_acceptance.md]
+context_references: [references/hmba_worked_method.md, references/hmba_outcome_api.md, references/injection_acceptance.md]
 enabled: true
 ---
 
 # MBA research knowledge
 
-Use configured JuTrack and general numerical tools in project-local code,
-not fixed sequences or installed lattices.
-Use these notes as starting points; search primary literature for technology
-parameters and uncertain physics, cite it, and choose methods from the evidence.
+Use configured JuTrack in project-local code. These draft notes support hypotheses,
+not fixed workflows. Cite primary literature for uncertain physics/technology.
 
 | Question | Reference |
 | --- | --- |
-| Conventional HMBA design? | [Established HMBA](references/hmba_outcome_api.md) |
-| Injection-based acceptance? | [Injection essentials](references/injection_acceptance.md) |
-| Sub-10-pm and superperiod design? | [Layout and optics exploration](references/very_low_emittance.md) |
-| Conventional MBA initialization? | [Optional TME-derived recipe](references/conventional_api.md) |
-| TME normalization? | [Analytical references](references/physics_reference_api.md) |
+| HMBA | [Method and measurements](references/hmba_outcome_api.md) |
+| Sub-10-pm/superperiods | [Exploration](references/very_low_emittance.md) |
+| Conventional initialization | [TME-derived recipe](references/conventional_api.md) |
+| TME scale | [Normalization](references/physics_reference_api.md) |
 
 Use complete-cell/ring evidence. Distinguish requirements, assumptions and aspirations;
 no universal limits, tunes or budgets. Co-design radiation, correction and acceptance.
@@ -37,19 +34,11 @@ both routes, not automatic topology replacement.
 For sub-10-pm/complex-superperiod design, read the complete guide before constructing:
 `read_expert(module_id="laboratory.mba_design", asset_id="references/very_low_emittance.md")`.
 
-Search physical magnet counts, ordering and roles, not just geometry/strengths.
-Compare dense many-weak-bend layouts with short, independently sized bends;
-do not fill spare length with equal dipoles.
-For the two-arc hypothesis, use ONE localized chromatic-correction region per arc
-and an intermediate user straight; larger-block linear reflection, not internal arc symmetry:
-two correction regions per block, not two per arc, not concatenated finished MBAs.
-Vary physical focusing spacing, independent bend lengths/angles, LGB and reverse bends;
-numerical slices add no focusing stations. Include internal bump quadrupoles creating
-complementary SF/SD optics; show actual lengths, angles and K1. Match the complete block and evaluate
-native radiation plus measured bounded chromatic correction inside optimization.
-Use persistent parallel JuTrack workers.
-These principles do not prove optimality or prescribe a route for all MBA tasks.
-Preserve declared optical conditions when optimization objectives change.
+The exploratory route considers physical magnet counts, ordering and roles,
+not just geometry/strengths; it is not concatenated finished MBAs.
+The [worked HMBA method](references/hmba_worked_method.md), measurement contract
+and injection notes are included below. Translate them into an actual builder,
+objectives and candidate comparisons.
 
 Fresh projects generate new candidates, without another project's fitted lattices
 unless explicitly requested. Explain hypotheses/knobs, then calculate in the

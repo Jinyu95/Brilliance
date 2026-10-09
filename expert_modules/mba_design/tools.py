@@ -11,11 +11,13 @@ from .hybrid_shape import (
 )
 from .physics_references import TMECellTargets, homogeneous_bend_tme_reference, tme_targets
 from .radiation_reporting import mba_radiation_report
+from .observables import hmba_optics_observables
 
 TMECellTargets = python_tool()(TMECellTargets)
 tme_targets = python_tool()(tme_targets)
 homogeneous_bend_tme_reference = python_tool()(homogeneous_bend_tme_reference)
 mba_radiation_report = python_tool()(mba_radiation_report)
+hmba_optics_observables = python_tool()(hmba_optics_observables)
 hybrid_mba_bend_roles = python_tool()(hybrid_mba_bend_roles)
 hybrid_mba_shape_diagnostics = python_tool()(hybrid_mba_shape_diagnostics)
 evaluate_hybrid_mba_shape = python_tool()(evaluate_hybrid_mba_shape)
