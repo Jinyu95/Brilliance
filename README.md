@@ -55,23 +55,13 @@ On Linux/macOS, use
 
 Open the address printed by the launcher (normally `http://127.0.0.1:8501`). Ask follow-up questions, change requirements, or request comparisons and plots in the same conversation.
 
-Long numerical jobs can continue independently of the model conversation. Pausing the agent does not stop these jobs; use their own controls and check their state before restarting the application. Recovery depends on the numerical program's checkpoint support.
-
-Unfinished requests continue automatically by default, with a shared allowance of research model turns per scientist message. 
-
-Configure `auto_continue` and `max_autonomous_increments` under `[interaction]` in `research_runtime.toml`. The one-hour `turn_wall_time_s` is a model-turn checkpoint, not a total research duration or a limit on independent numerical jobs. The agent stops when the request is answered, a decision or blocker needs attention, you pause it, or its allowance is exhausted. The existing consecutive-timeout guard also pauses a stalled conversation after two full model time slices. Send a new message to resume from saved work with a new allowance. Changing configuration does not restart paused projects.
+Configure `auto_continue` and `max_autonomous_increments` under `[interaction]` in `research_runtime.toml`. The agent stops when the request is answered, a decision or blocker needs attention, you pause it, or its allowance is exhausted. The existing consecutive-timeout guard also pauses a stalled conversation after two full model time slices. Send a new message to resume from saved work with a new allowance. Changing configuration does not restart paused projects.
 
 Research results are saved under `research_projects/`. Back up this directory to preserve your work.
 
 ## Demonstration
 
-Read-only snapshots of research conversations are available in [the example gallery](examples/index.html)
-([GitHub Pages](https://jinyu95.github.io/Brilliance/examples/index.html)):
-
-- **One-chat MBA design** — [View online](https://jinyu95.github.io/Brilliance/examples/mba-design/index.html) · [open locally](examples/mba-design/index.html).
-- **Sub-10 pm design exploration** — [open locally](examples/sub-10-pm-exploration/index.html).
-- **One-chat Space-charge study** — [view online](https://jinyu95.github.io/Brilliance/examples/space-charge/index.html) · [open locally](examples/space-charge/index.html).
-- **Real-machine optics identification (LOCO)** — [open locally](examples/machine-correction/index.html). 
+Read-only snapshots of research conversations are available in [the example gallery](https://jinyu95.github.io/Brilliance/examples/index.html).
 
 
 ## Extend
