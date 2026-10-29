@@ -650,7 +650,36 @@ _GENERIC_ROUTING_TOKENS = {
     "matching",
     "radiation",
     "optimization",
+    "optics",
+    "linear",
+    "nonlinear",
+    "dispersion",
+    "quadrupole",
+    "quadrupoles",
+    "measured",
+    "measurements",
 }
+_COMMON_WORDS = {"a", "an", "and", "as", "at", "by", "for", "from", "in", "into",
+                 "is", "it", "of", "on", "or", "the", "to", "using", "with"}
+
+
+def _specialist_score(module: ExpertModule, query: str) -> float:
+    """Prefer declared domain/tag phrases to incidental prose overlap.
+
+    Normalize separators so e.g. a response-matrix tag matches "response matrix",
+    but require whole phrases: an isolated shared word is not a domain match.
+    Count distinct distinguishing words once, regardless of repeated asset tags.
+    """
+    normalize = lambda value: " ".join(re.findall(r"[a-z0-9]+", str(value).lower()))
+    text = " " + normalize(query) + " "
+    terms = (module.id, module.id.rsplit(".", 1)[-1], *module.domains,
+             *(tag for asset in module.knowledge if asset.status != "deprecated" for tag in asset.tags))
+    matched = set()
+    for term in terms:
+        phrase = normalize(term)
+        if phrase and " " + phrase + " " in text:
+            matched.update(set(phrase.split()) - _GENERIC_ROUTING_TOKENS - _COMMON_WORDS)
+    return 12.0 * len(matched)
 
 
 def _module_matches_query(module: ExpertModule, query: str) -> bool:
@@ -668,19 +697,21 @@ def _module_matches_query(module: ExpertModule, query: str) -> bool:
                 *(tag for item in module.knowledge for tag in item.tags),
             )
         )
-    ) - _GENERIC_ROUTING_TOKENS
-    return bool(query_tokens & routing_tokens)
+    ) - _GENERIC_ROUTING_TOKENS - _COMMON_WORDS
+    return bool(_specialist_score(module, query) or query_tokens & routing_tokens)
 
 
 def _module_score(module: ExpertModule, query: str) -> float:
-    query_tokens = _tokens(query)
+    query_tokens = _tokens(query) - _GENERIC_ROUTING_TOKENS - _COMMON_WORDS
     if not query_tokens:
         return 0.0
     fields = _tokens(" ".join((module.title, module.description, *module.domains)))
     knowledge = _tokens(" ".join(
         value for item in module.knowledge for value in (item.title, item.summary, *item.tags)
     ))
-    return float(4 * len(query_tokens & fields) + 2 * len(query_tokens & knowledge))
+    return _specialist_score(module, query) + float(
+        4 * len(query_tokens & fields) + 2 * len(query_tokens & knowledge)
+    )
 
 
 def _knowledge_score(
@@ -690,13 +721,15 @@ def _knowledge_score(
     text: str,
     query: str,
 ) -> float:
-    query_tokens = _tokens(query)
+    query_tokens = _tokens(query) - _GENERIC_ROUTING_TOKENS - _COMMON_WORDS
     metadata_tokens = _tokens(" ".join((
         module.title, module.description, *module.domains,
         asset.title, asset.summary, *asset.tags, heading,
     )))
     content_tokens = _tokens(text)
-    score = float(5 * len(query_tokens & metadata_tokens) + len(query_tokens & content_tokens))
+    score = _specialist_score(module, query) + float(
+        5 * len(query_tokens & metadata_tokens) + len(query_tokens & content_tokens)
+    )
     score += asset.priority / 20.0
     if asset.kind == "foundation" and asset.priority >= 90:
         score += 5.0

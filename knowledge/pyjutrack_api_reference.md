@@ -349,6 +349,34 @@ params["bunchlength"]     # natural bunch length [m]
 This is the most important analysis function for evaluating a lattice design.
 Always call ringpara after building a ring and verifying stability.
 
+### Touschek lifetime
+
+```python
+result = jt.touschek_lifetime(
+    ring, energy_eV=3.5e9,
+    emittances_m=(eps_x, eps_y),  # geometric m rad, prescribed stored beam
+    sigma_z_m=sigma_z, sigma_delta=sigma_delta,
+    bunch_charge_C=charge,
+    momentum_acceptance=ma,      # (len(ring), 2), signed (negative, positive)
+)
+print(result["lifetime_s"])
+```
+
+Use radiation/RF-off, uncoupled JuTrack optics and supply the separately evaluated
+acceptance appropriate to the intended operating model. `ma` is fractional
+momentum, not percent, at **0-based element entrances**. An explicit constant pair
+such as `(-0.01, 0.01)` is a uniform-acceptance assumption, not measured full-ring
+acceptance. The function performs no acceptance tracking or magnet slicing.
+`bunch_current_A` may replace `bunch_charge_C`; it is **per-bunch** current.
+Emittances, bunch length and momentum spread are explicit: this function does not
+solve IBS, coupled equilibrium or impedance-induced bunch lengthening.
+
+For saved/dense optics, `jutrack_touschek.touschek_from_optics` accepts beta, alpha,
+both-plane dispersion, physical integration weights and circumference. Weights
+must cover the full ring, or an explicitly repeated cell whose **optics and
+acceptance** both repeat. This path needs NumPy/SciPy but does not start Julia.
+Local loss rates and quadrature diagnostics are returned alongside the lifetime.
+
 ---
 
 ## 10. Radiation Control

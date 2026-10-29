@@ -145,10 +145,13 @@ Examine two-plane correction-pair maps, not just report phase advances afterward
 Keep independent nonlinear families despite reflected linear geometry.
 Do not force identical nonlinear strengths in both insertions.
 Chromatic correction does not prove nonlinear acceptance; track corrected alternatives.
-Use [injection-based targets](injection_acceptance.md) for both transverse planes;
-scan beyond them and retain these targets when optimizing momentum acceptance.
+Use [injection-based targets](injection_acceptance.md) for on-momentum DA in both
+planes. Preserve that DA while optimizing origin-launched MA; do not turn it into
+a finite-amplitude requirement at every momentum. Follow the separate DA/MA
+definitions in the [observation contract](hmba_outcome_api.md), including on restart.
 [Cross-straight pairing](https://arxiv.org/abs/2212.01870).
 
 Save exact candidates, solver termination and integration settings before reporting;
-verify momentum-step convergence and carry those settings into restarts.
+carry those settings into restarts. Use the observation contract's bounded checks
+and agreed DA measures, not point-for-point preservation of an old aperture.
 Report distinct physical layouts evaluated and measured trade-offs, not just trial counts.

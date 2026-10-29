@@ -5,7 +5,7 @@ summary: Concise MBA design knowledge and optional JuTrack-backed diagnostics; n
 domains: [mba, lattice design, electron storage rings, synchrotron light sources]
 authors: [Brilliance project team (draft maintainer)]
 tags: [mba, hmba, h7ba, modified-h7ba, 5ba, 6ba, 7ba, 9ba, tme, modified-tme, hybrid-mba, emittance, chromatic, sextupole, matching, radiation, optimization, jutrack, superperiod, superperiods, super-periodic, ultralow-emittance, sub-10]
-version: 3.17.0
+version: 3.18.0
 status: draft
 knowledge_status: draft
 kind: method
@@ -15,8 +15,8 @@ enabled: true
 
 # MBA research knowledge
 
-Use configured JuTrack in project-local code. These draft notes support hypotheses,
-not fixed workflows. Cite primary literature for uncertain physics/technology.
+Use configured JuTrack. These are hypotheses, not fixed workflows; consult
+primary literature for uncertain physics/technology.
 
 | Question | Reference |
 | --- | --- |
@@ -25,22 +25,15 @@ not fixed workflows. Cite primary literature for uncertain physics/technology.
 | Conventional initialization | [TME-derived recipe](references/conventional_api.md) |
 | TME scale | [Normalization](references/physics_reference_api.md) |
 
-Use complete-cell/ring evidence. Distinguish requirements, assumptions and aspirations;
-no universal limits, tunes or budgets. Co-design radiation, correction and acceptance.
-There is no preferred bend count; honor explicit topology.
-Ordinary HMBA requests use the established guide. Sub-10-pm goals warrant considering
-both routes, not automatic topology replacement.
+Use complete-cell/ring evidence; co-design radiation, correction and acceptance.
+Honor explicit topology; no universal limits, tunes, budgets or bend count.
+Ordinary HMBA requests use the established guide. Sub-10-pm goals can use either route.
 
 For sub-10-pm/complex-superperiod design, read the complete guide before constructing:
 `read_expert(module_id="laboratory.mba_design", asset_id="references/very_low_emittance.md")`.
 
-The exploratory route considers physical magnet counts, ordering and roles,
-not just geometry/strengths; it is not concatenated finished MBAs.
-The [worked HMBA method](references/hmba_worked_method.md), measurement contract
-and injection notes are included below. Translate them into an actual builder,
-objectives and candidate comparisons.
+Explore physical counts, ordering and roles, not concatenated finished MBAs.
+The bundled method, observation contract and injection notes support comparisons.
 
-Fresh projects generate new candidates, without another project's fitted lattices
-unless explicitly requested. Explain hypotheses/knobs, then calculate in the
-same request without routine approval pauses. Save before reporting; show scientific
-trade-offs and plots. Failed searches are not impossibility proofs.
+Do not import another project's lattice unless requested. Explain knobs and save
+trade-offs. Failed searches are not impossibility proofs.

@@ -298,7 +298,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 supplied_arguments=supplied_arguments,
                 argument_resolution=argument_resolution,
             )
-            _print_json(_managed_job_receipt(root, job))
+            _print_json({**_managed_job_receipt(root, job), "operation": "submit"})
             return 0
         execution = execute_expert_tool(
             expert_registry, args.tool_id, supplied_arguments, context=context
@@ -347,6 +347,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_json(
             {
                 **_managed_job_receipt(root, job),
+                "operation": "submit",
                 "argument_resolution": argument_resolution,
             }
         )

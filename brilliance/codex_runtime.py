@@ -1416,10 +1416,19 @@ async def _consume_turn_stream(
             receipt = stream_state.get("managed_job_receipt")
             abort = stream_state.get("operational_abort")
             if isinstance(receipt, Mapping) or isinstance(abort, Mapping):
+                if (store.project_root / store.project_id / "agent_pause.request").exists():
+                    control = {"kind": "scientist_pause"}
+                    interrupt = getattr(handle, "interrupt", None)
+                    if callable(interrupt):
+                        with suppress(Exception):
+                            await asyncio.wait_for(interrupt(), timeout=2.0)
+                    break
                 control = dict(receipt if isinstance(receipt, Mapping) else abort)
                 store.update(
                     label=(
-                        "Managed calculation is running independently"
+                        "Managed calculation is queued independently"
+                        if isinstance(receipt, Mapping) and receipt.get("state") == "queued"
+                        else "Managed calculation is running independently"
                         if isinstance(receipt, Mapping)
                         else "Stopped a wasteful retry loop"
                     ),
@@ -1985,18 +1994,50 @@ def _command_operational_failure(item: Mapping[str, Any]) -> dict[str, Any] | No
 
 
 def _managed_job_receipt_from_item(item: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Hand off fresh submissions, never status snapshots or archived receipts."""
     if str(item.get("type", "")) != "commandExecution" or not _completed_command_succeeded(item):
+        return None
+    if item.get("exitCode", item.get("exit_code", 0)) not in (None, 0):
+        return None
+    # The CLI has only these two global options before its subcommand. Matching
+    # that invocation also handles PowerShell's quoted outer -Command wrapper.
+    argument = r'''(?:'[^'\r\n]*'|"[^"\r\n]*"|[^\s;'"&|]+)'''
+    entrypoint = (
+        r'''(?:-m\s+['"]?brilliance\.codex_tools['"]?'''
+        r'''|'[^'\r\n]*brilliance-tool(?:\.exe)?'|"[^"\r\n]*brilliance-tool(?:\.exe)?"'''
+        r'''|(?:[^\s;'"&|]*[/\\])?brilliance-tool(?:\.exe)?)'''
+    )
+    submission = (
+        r"(?:^|\s|&)" + entrypoint + r"\s+"
+        + r"(?:(?:--project-root|--project-id)(?:\s+|=)" + argument + r"\s+)*"
+        + r'''['"]?(?:run-expert-tool|submit-expert-job)['"]?(?=\s|$)'''
+    )
+    if not re.search(submission, str(item.get("command", ""))):
         return None
     output = _command_output(item)
     decoder = json.JSONDecoder()
-    for index, character in enumerate(output):
-        if character != "{":
+    index = 0
+    while index < len(output):
+        if output[index] not in "{[":
+            index += 1
             continue
         try:
-            value, _ = decoder.raw_decode(output[index:])
+            value, end = decoder.raw_decode(output, index)
         except json.JSONDecodeError:
+            index += 1
             continue
-        if isinstance(value, Mapping) and value.get("kind") == "managed_expert_calculation":
+        # Consume the whole document: nested receipts in a result/status list
+        # describe evidence, not another submission.
+        index = end
+        if (
+            isinstance(value, Mapping)
+            and value.get("kind") == "managed_expert_calculation"
+            and value.get("operation", "submit") == "submit"
+            and value.get("state") in {"queued", "running"}
+            and value.get("continues_without_chat_turn") is True
+            and all(isinstance(value.get(key), str) and value[key].strip()
+                    for key in ("job_id", "project_id"))
+        ):
             return dict(value)
     return None
 
@@ -2462,8 +2503,9 @@ def _mark_optimizer_progress_interrupted(
 def _managed_job_checkpoint_message(receipt: Mapping[str, Any]) -> str:
     model = receipt.get("tool_id", "long research program")
     job_id = receipt.get("job_id", "unknown")
+    state = "queued" if receipt.get("state") == "queued" else "running"
     return (
-        f"The durable calculation `{model}` is running as job `{job_id}`. The model turn has "
+        f"The durable calculation `{model}` is {state} as job `{job_id}`. The model turn has "
         "ended instead of polling it. Progress and the final tables/plots will appear in this "
         "chat automatically; you may send new messages or explicitly stop the calculation."
     )

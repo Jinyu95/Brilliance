@@ -221,8 +221,10 @@ and [injection](../expert_modules/mba_design/references/injection_acceptance.md)
 2. Map DA in (x, y) space at injection point.
 3. Derive horizontal and vertical targets from the injection scheme, incoming
    beam and launch optics; no universal millimetre threshold applies.
-4. Evaluate off-momentum DA and ring-local momentum acceptance for the requested
-   capture and lifetime targets.
+4. For local momentum acceptance, launch on the on-momentum closed orbit, apply
+   a momentum offset and track; repeat both signs at the relevant ring locations.
+   Finite-amplitude off-momentum DA is a separate measurement, not the default
+   MA requirement. See the maintained HMBA observation contract for definitions.
 5. Optimize with multi-objective algorithms (MOGA, particle swarm, etc.).
 
 ### Stage 4: Injection Scheme

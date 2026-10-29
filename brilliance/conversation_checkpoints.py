@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
 import stat
 import tempfile
+import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +28,48 @@ _ROOTS = ("workspace", "state", "agent_evidence", "evidence")
 _EXCLUDED = {"agent_sessions", "runtime", "progress", "__pycache__", ".git", ".venv",
              "node_modules", ".env", "auth.json", "credentials.json"}
 _SCHEMA = "brilliance-conversation-checkpoint/v1"
+
+
+def _restore_io_path(path: Path) -> Path:
+    """Allow Windows staging to exceed MAX_PATH without a system setting change."""
+    if os.name != "nt":
+        return path
+    absolute = os.path.abspath(path)
+    if absolute.startswith("\\\\?\\"):
+        return Path(absolute)
+    if absolute.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + absolute[2:])
+    return Path("\\\\?\\" + absolute)
+
+
+def _publish_branch(staging: Path, destination: Path) -> None:
+    """Publish atomically, allowing brief Windows scanner/sharing locks to clear."""
+    # A large restored tree can stay locked for several seconds after its last
+    # write. Allow about 14 seconds, without extending the research/job budget.
+    for attempt in range(32):
+        # Never replace or merge with another project, including one created
+        # while a transient lock was being retried.
+        if destination.exists():
+            raise FileExistsError(f"The destination project already exists: {destination}")
+        try:
+            staging.rename(destination)
+            return
+        except OSError as exc:
+            transient = (
+                isinstance(exc, PermissionError)
+                or getattr(exc, "winerror", None) in (5, 32, 33)
+            )
+            if not transient:
+                raise
+            if attempt == 31:
+                raise PermissionError(
+                    "Checkpoint restore could not publish its new project folder "
+                    "because access remained denied after bounded retries. "
+                    "The original project and saved checkpoint are unchanged; "
+                    "no research job was started. Close applications holding the "
+                    f"folder open and retry Continue. Destination: {destination}"
+                ) from exc
+            time.sleep(min(0.05 * 2**attempt, 0.5))
 
 
 def _project(root, project_id):
@@ -164,7 +208,10 @@ class ConversationCheckpoints:
         if destination.exists():
             raise ValueError("The destination project already exists")
         # A staging directory prevents incomplete branches appearing as projects.
-        temporary_root = self.root / (".restore-" + uuid4().hex)
+        # Its extra path layer can exceed Windows MAX_PATH even when every
+        # original file is readable. Extend only private I/O paths; published
+        # project paths and restore provenance retain their ordinary spelling.
+        temporary_root = _restore_io_path(self.root / (".restore-" + uuid4().hex))
         staging = temporary_root / new_id
         staging.mkdir(parents=True)
         try:
@@ -257,9 +304,17 @@ class ConversationCheckpoints:
             # Publish only after the branch can be loaded, including its revision
             # and regenerated archive sidecars. A crash cannot expose half a project.
             ProjectStore(temporary_root).save(project)
-            staging.rename(destination)
+            _publish_branch(staging, destination)
             return project
         finally:
             # Only our explicit, freshly-created staging directory is removed.
-            if temporary_root.exists():
-                shutil.rmtree(temporary_root)
+            # Cleanup must not turn a published branch into a reported failure,
+            # or obscure the original restore error.
+            try:
+                if temporary_root.exists():
+                    shutil.rmtree(temporary_root)
+            except OSError:
+                logging.getLogger(__name__).warning(
+                    "Could not clean checkpoint staging folder %s",
+                    temporary_root, exc_info=True,
+                )

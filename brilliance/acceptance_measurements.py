@@ -40,6 +40,13 @@ def connected_momentum_acceptance(
 ) -> dict[str, Any]:
     """Reduce a (locations, delta) survival mask to zero-connected intervals.
 
+    For standard local MA, supply tracks launched on the on-momentum closed orbit
+    with a momentum kick (zero transverse coordinates in an ideal centred ring),
+    not recentered on each off-momentum orbit. Finite-amplitude/all-phase survival
+    is a separate measurement, not required by this reducer. It does not track or
+    infer launch conditions: record them alongside the mask. A map/orbit failure
+    is not a tracked loss and must not be silently encoded as False.
+
     Delta is fractional momentum offset (0.02 means 2%). Include an independently
     tracked zero at EVERY location; lost origins yield empty connected sets.
     Coordinates may be unordered. Each sign stops at its first lost sample,

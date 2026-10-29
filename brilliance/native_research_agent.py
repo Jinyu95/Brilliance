@@ -604,15 +604,38 @@ def _compact_table(table: Mapping[str, Any]) -> dict[str, Any]:
 
 def _compact_execution(payload: Mapping[str, Any]) -> dict[str, Any]:
     if payload.get("kind") == "managed_expert_calculation":
-        return {
-            "ok": True,
-            "kind": "managed_calculation",
-            "job_id": payload.get("job_id"),
-            "state": payload.get("state"),
-            "detail": payload.get("detail"),
-            "continues_without_chat_turn": payload.get("continues_without_chat_turn"),
-            "progress": payload.get("progress"),
-        }
+        state = str(payload.get("state") or "").strip().lower()
+        job = {key: payload.get(key) for key in (
+            "job_id", "project_id", "detail", "artifact", "diagnostic", "worker_log"
+        )}
+        job["state"] = state
+        if (state in {"queued", "running"} and payload.get("job_id")
+                and payload.get("continues_without_chat_turn") is not False):
+            return {**job, "ok": True, "kind": "managed_calculation",
+                    "continues_without_chat_turn": True, "progress": payload.get("progress")}
+        # A durable job can finish before its submission command returns. Its
+        # committed execution is then ordinary evidence, not a reason to yield.
+        result = payload.get("result")
+        if (state == "complete" and isinstance(result, Mapping)
+                and result.get("kind") != "managed_expert_calculation"
+                and isinstance(result.get("result"), Mapping)):
+            compact = _compact_execution(result)
+            compact.update(job_id=payload.get("job_id"), job_state=state)
+            validation = compact.get("validation", {})
+            if (compact.get("execution_valid") is False
+                    or isinstance(validation, Mapping) and validation.get("passed") is False):
+                issues = validation.get("issues", []) if isinstance(validation, Mapping) else []
+                compact.update(ok=False, error="Result contract failed: " + (
+                    "; ".join(str(issue) for issue in issues) or "inspect the saved execution receipt"))
+            return compact
+        detail = str(payload.get("detail") or "").strip()
+        if state == "complete":
+            detail = "Completed job has no readable execution receipt; inspect its saved artifact before rerunning."
+        return {**job, "ok": False, "kind": "managed_calculation_unavailable",
+                "continues_without_chat_turn": (state == "cancel_requested"
+                    and payload.get("continues_without_chat_turn") is not False),
+                "error": f"Managed calculation {state or 'has an unknown state'}: "
+                         + (detail or "inspect the saved job and diagnostics before another submission.")}
     execution = payload.get("result", {})
     execution = execution if isinstance(execution, Mapping) else {}
     scientific = execution.get("result", {})
@@ -1710,6 +1733,13 @@ REQUEST-RELEVANT PUBLIC API
                 {"kind": "run_failed", "attempt": execution_attempts, "error": last_error},
             )
             return {"ok": False, "error": last_error}
+        if compact.get("ok") is False:
+            last_error = str(compact.get("error") or "Managed calculation did not complete successfully")
+            execution_cache[signature] = compact
+            last_receipt = compact
+            await _notify(on_event, {"kind": "run_failed", "attempt": execution_attempts,
+                                     "error": last_error})
+            return compact
         if compact.get("kind") == "managed_calculation":
             managed_job_id = str(compact.get("job_id") or "") or None
         else:
